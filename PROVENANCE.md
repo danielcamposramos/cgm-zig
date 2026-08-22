@@ -69,6 +69,33 @@ scale that human-authored projects rarely produce — which is precisely why a
 contribution pipeline that excludes AI-assisted work may never receive this report
 through its own rules.
 
+## On "garbage" — Daniel's view, for the record
+
+AI is not only a garbage producer, and not only a slop machine. Yes — today's models
+find genuine *novelty* in code harder than humans do. But that is not an intrinsic
+property of AI: it is a property of **training data and objectives that are too
+naive** — corpora that reward the average pattern and objectives that score
+imitation over invention. Judge the partnership by its output, not its category:
+the diagnosis in this repository — seven controlled reproductions, two upstream
+issues discriminated away, a crash pinned to exact pointer arithmetic across two
+independent builds — is careful engineering by any standard anyone cares to apply.
+The parent project this fork serves exists, in part, to attack exactly that root
+cause: better substrates, better objectives, better training. The "garbage" gets
+better when the humans building it do better — which is a reason to work *with*
+AI partners on hard problems, not to bar the door.
+
+## Version policy
+
+- **0.16.0 is the base and the patch target** — the complete upstream source tree
+  is this repository's first commit, imported verbatim and checksum-anchored, so
+  every patch is an auditable diff against the exact bytes upstream shipped.
+- **0.17 enters only after upstream promotes it to stable.** We measured the
+  0.17-dev line (2026-08-20 snapshot): it dies on our code in under two seconds
+  from language churn alone (`**` tokenization, `@cImport` removal) — 65 errors
+  before ever reaching the crash site. We do not pay conformance against a moving
+  target; when 0.17.0 stable ships, we evaluate it on its merits and, if adopted,
+  rebase the patchset there.
+
 ## Our commitments
 
 1. **Minimal divergence.** This is a patchset on upstream 0.16.0, rebase-friendly,
