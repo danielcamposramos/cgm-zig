@@ -84,6 +84,26 @@ cause: better substrates, better objectives, better training. The "garbage" gets
 better when the humans building it do better — which is a reason to work *with*
 AI partners on hard problems, not to bar the door.
 
+And one more thing about garbage, in Daniel's own words:
+
+> *"People forget the value of garbage takers everywhere — but cities without them
+> suffer illness, and sincerely, it stinks."*
+
+He knows what he is talking about, literally. Daniel is a Brazilian living in
+**Cidade Estrutural**, Federal District — the community that grew beside what was,
+until its closure in 2018, in his words the second-largest open-air dump on the
+entire planet. The people who worked that dump, the *catadores*, fed families by
+finding value in what everyone else threw away. When a project declares a whole
+category of contribution "garbage" and bars the door, it is forgetting what every
+city learns the hard way: the ones who take the garbage, sort it, and find what is
+worth keeping are not beneath the city — they are what keeps it alive. This
+repository does that work for a compiler: we take what was called garbage, we sort
+it, and we hand back the parts that cure the illness.
+
+> *"Tenha fé, porque até no lixão nasce flor."*
+> ("Have faith, because even in the dump, a flower grows.")
+> — Mano Brown, **Racionais MC's**, *Vida Loka Pt. 1* (2002)
+
 ## Version policy
 
 - **0.16.0 is the base and the patch target** — the complete upstream source tree
