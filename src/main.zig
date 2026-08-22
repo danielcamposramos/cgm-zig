@@ -33,6 +33,7 @@ const crash_report = @import("crash_report.zig");
 const Zcu = @import("Zcu.zig");
 const mingw = @import("libs/mingw.zig");
 const dev = @import("dev.zig");
+const AstCheckImports = @import("AstCheckImports.zig");
 
 test {
     _ = Package;
@@ -6311,6 +6312,8 @@ const usage_ast_check =
     \\  --color [auto|off|on] Enable or disable colored error messages
     \\  --zon                 Treat the input file as ZON, regardless of file extension
     \\  -t                    (debug option) Output ZIR in text form to stdout
+    \\  --module-graph=<path> Also validate @import operands against a stage-0 module
+    \\                        graph (Crown stage 0.5 rung 1; requires [file], not stdin)
     \\
     \\
 ;
@@ -6324,6 +6327,9 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
     var want_output_text = false;
     var force_zon = false;
     var zig_source_path: ?[]const u8 = null;
+    // Crown stage 0.5 rung 1 (docs/crown/PLAN.md): additive, off by default. Non-null only
+    // when the operator opts in; see `AstCheckImports.checkAgainstGraph`.
+    var module_graph_path: ?[]const u8 = null;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -6336,6 +6342,8 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
                 want_output_text = true;
             } else if (mem.eql(u8, arg, "--zon")) {
                 force_zon = true;
+            } else if (mem.cutPrefix(u8, arg, "--module-graph=")) |rest| {
+                module_graph_path = rest;
             } else if (mem.eql(u8, arg, "--color")) {
                 if (i + 1 >= args.len) {
                     fatal("expected [auto|on|off] after --color", .{});
@@ -6353,6 +6361,13 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
         } else {
             fatal("extra positional parameter: '{s}'", .{arg});
         }
+    }
+
+    // --module-graph resolves relative file imports against the checked file's directory,
+    // which stdin input has none of; refuse by name (doctrine 2) rather than silently
+    // skipping the requested check or resolving against an arbitrary cwd guess.
+    if (module_graph_path != null and zig_source_path == null) {
+        fatal("--module-graph requires [file] (relative imports need a directory to resolve against; stdin has none)", .{});
     }
 
     const display_path = zig_source_path orelse "<stdin>";
@@ -6379,6 +6394,14 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
         break :mode .zig;
     };
 
+    // ZON documents cannot contain @import, so a requested graph check can never run on
+    // them. Refuse by name (doctrine 2), mirroring the stdin refusal above, rather than
+    // exiting 0 with the requested check silently skipped -- review caught exactly that
+    // silent no-op on `--module-graph ... --zon`.
+    if (module_graph_path != null and mode == .zon) {
+        fatal("--module-graph requires a Zig source file; ZON has no imports to validate", .{});
+    }
+
     const tree = try Ast.parse(arena, source, mode);
 
     var stdout_writer = Io.File.stdout().writerStreaming(io, &stdout_buffer);
@@ -6395,6 +6418,17 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
                 try error_bundle.renderToStderr(io, .{}, color);
                 if (zir.loweringFailed()) {
                     process.exit(1);
+                }
+            }
+
+            // Crown stage 0.5 rung 1 (docs/crown/PLAN.md): only after the normal ast-check
+            // work above has already succeeded on this file (no ZIR compile errors) do we
+            // additionally validate its @import operands against the module graph. Absent
+            // --module-graph this whole block is unreachable and behavior is byte-identical
+            // to upstream ast-check.
+            if (module_graph_path) |graph_path| {
+                if (!zir.hasCompileErrors()) {
+                    try AstCheckImports.checkAgainstGraph(arena, io, tree, zig_source_path.?, display_path, graph_path, color);
                 }
             }
 
