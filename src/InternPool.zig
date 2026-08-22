@@ -4113,7 +4113,50 @@ pub const Index = enum(u32) {
 
         fn wrap(unwrapped: Unwrapped, ip: *const InternPool) Index {
             assert(@intFromEnum(unwrapped.tid) <= ip.getTidMask());
-            assert(unwrapped.index <= ip.getIndexMask(u30));
+            // cgm-zig PATCH 001 — never a silent anything.
+            //
+            // Upstream writes `assert(unwrapped.index <= ip.getIndexMask(u30));` here.
+            // `assert` is `unreachable` in disguise, so it is compiled OUT of every
+            // ReleaseFast build — which is every shipped zig. On a compilation that
+            // exhausts this space the out-of-range index is therefore wrapped, stored
+            // into the shard map, and later dereferenced as a wild pointer. What the
+            // user sees is a bare SIGSEGV with ZERO bytes on stderr and no exit
+            // diagnostic at all.
+            //
+            // The limit is real and it is NARROW. `InternPool.Index` is confined to
+            // 30 bits — not 32 — because `CaptureValue` (`packed struct(u32)`) carries
+            // one in a `u30` field alongside a 2-bit tag. Those 30 bits are then split
+            // `tid_width = log2_ceil(thread_count)` ways, one partition per compiler
+            // thread, so the ceiling SHRINKS as the host gets wider. Semantic analysis
+            // of a single comptime unit is serial, so one partition absorbs the entire
+            // comptime workload while the others sit nearly empty.
+            //
+            // This patch does not raise the ceiling (widening `CaptureValue` touches 48
+            // sites and changes the `extra` trailing-data encoding; that is priced, not
+            // executed, here). It converts the ceiling from silent memory corruption
+            // into a named refusal that survives release builds and reports the numbers
+            // needed to size a real fix.
+            const index_mask = ip.getIndexMask(u30);
+            if (unwrapped.index > index_mask) {
+                @branchHint(.cold);
+                std.debug.panic(
+                    "InternPool: per-thread Index space exhausted on thread {d}: item index " ++
+                        "{d} exceeds this thread's limit of {d}. `Index` is 30 bits wide " ++
+                        "(CaptureValue.idx is u30) and is split {d} ways ({d} bits) across " ++
+                        "compiler threads, so a wider host gets a SMALLER per-thread limit; " ++
+                        "comptime analysis of one unit is serial, so it all lands in a single " ++
+                        "partition. Lower `-j` to widen each partition (`-j2` gives {d} items " ++
+                        "per thread), or split this compilation unit.",
+                    .{
+                        @intFromEnum(unwrapped.tid),
+                        unwrapped.index,
+                        index_mask,
+                        @as(u32, 1) << ip.tid_width,
+                        ip.tid_width,
+                        @as(u32, std.math.maxInt(u30)) >> 1,
+                    },
+                );
+            }
             return @enumFromInt(@shlExact(@as(u32, @intFromEnum(unwrapped.tid)), ip.tid_shift_30) |
                 unwrapped.index);
         }

@@ -465,6 +465,8 @@ const usage_build_generic =
     \\  -fno-emit-h               (default) Do not generate a C header file (.h)
     \\  -femit-docs[=path]        Create a docs/ dir with html documentation
     \\  -fno-emit-docs            (default) Do not produce docs/ dir with html documentation
+    \\  -femit-module-graph[=path] Emit the resolved module graph as JSON (Crown stage 0)
+    \\  -fno-emit-module-graph    (default) Do not emit the module graph JSON
     \\  -femit-implib[=path]      (default) Produce an import .lib when building a Windows DLL
     \\  -fno-emit-implib          Do not produce an import .lib when building a Windows DLL
     \\  --show-builtin            Output the source of @import("builtin") then exit
@@ -870,6 +872,9 @@ fn buildOutputType(
     var emit_llvm_ir: Emit = .no;
     var emit_llvm_bc: Emit = .no;
     var emit_docs: Emit = .no;
+    // Crown stage 0 (see docs/crown/PLAN.md): resolved module graph as JSON. Threaded
+    // through exactly like `emit_docs` above (INTERNALS_MAP.md 5.2).
+    var emit_module_graph: Emit = .no;
     var emit_implib: Emit = .yes_default_path;
     var emit_implib_arg_provided = false;
     var target_arch_os_abi: ?[]const u8 = null;
@@ -1575,6 +1580,12 @@ fn buildOutputType(
                         emit_docs = .{ .yes = rest };
                     } else if (mem.eql(u8, arg, "-fno-emit-docs")) {
                         emit_docs = .no;
+                    } else if (mem.eql(u8, arg, "-femit-module-graph")) {
+                        emit_module_graph = .yes_default_path;
+                    } else if (mem.cutPrefix(u8, arg, "-femit-module-graph=")) |rest| {
+                        emit_module_graph = .{ .yes = rest };
+                    } else if (mem.eql(u8, arg, "-fno-emit-module-graph")) {
+                        emit_module_graph = .no;
                     } else if (mem.eql(u8, arg, "-femit-implib")) {
                         emit_implib = .yes_default_path;
                         emit_implib_arg_provided = true;
@@ -3435,6 +3446,8 @@ fn buildOutputType(
 
     const emit_docs_resolved = emit_docs.resolve(io, "docs", output_to_cache);
 
+    const emit_module_graph_resolved = emit_module_graph.resolve(io, "module-graph.json", output_to_cache);
+
     const is_exe_or_dyn_lib = switch (create_module.resolved_options.output_mode) {
         .Obj => false,
         .Lib => create_module.resolved_options.link_mode == .dynamic,
@@ -3575,6 +3588,7 @@ fn buildOutputType(
         .emit_llvm_ir = emit_llvm_ir_resolved,
         .emit_llvm_bc = emit_llvm_bc_resolved,
         .emit_docs = emit_docs_resolved,
+        .emit_module_graph = emit_module_graph_resolved,
         .emit_implib = emit_implib_resolved,
         .lib_directories = create_module.lib_directories.items,
         .rpath_list = create_module.rpath_list.items,

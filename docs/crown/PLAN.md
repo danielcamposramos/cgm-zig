@@ -65,7 +65,8 @@ compiler could recompute.
 | Stage | Deliverable | Divergence cost | Status |
 |---|---|---|---|
 | 0 | **Module-graph observability**: a flag that emits the fully-resolved module graph (module name, root path, file membership, import edges, per-module file content digests) as JSON. Zero behavior change without the flag. | One flag + one walk + one emitter; trivially rebase-friendly | fleshing now |
-| 1 | **Internals map**: a cited map of where per-module boundaries already exist in the compiler and where they blur (`docs/crown/INTERNALS_MAP.md`). Documentation only. | none | workflow running |
+| 0.5 | **Pre-compile tooling** (four rungs, each consuming stage 0's emitted graph — see the section below): import-aware `ast-check` · decl-existence pass ("sema-lite") · batch mode with honest denominators · check-as-module. | additive flags on existing tools; no changed defaults | after 0 |
+| 1 | **Internals map**: a cited map of where per-module boundaries already exist in the compiler and where they blur (`docs/crown/INTERNALS_MAP.md`). Documentation only. | none | done |
 | 2a | **Analysis-reuse ledger**: instrument `Zcu` to attribute analysis work (units analyzed, ZIR→AIR lowering, comptime evaluations) to the module that owns it, and report per-module totals + the context-free/context-sensitive split *measured, not asserted*. Read-only accounting. | small, additive | after 0+1 |
 | 2b | **DWARF dedup-by-reference**: shared modules' debug info emitted once per build sweep and referenced (type units / `DW_AT_dwo`-style separation as fits `link/Dwarf.zig`'s structure), instead of copied per unit. | medium; confined to link/ | after 2a |
 | 2c | **The cache proper**: content-addressed per-module artifacts for the context-free class, keyed as above, stored via the existing `std.Build.Cache` machinery (`Compilation.zig` already threads `CacheUse` — we extend an existing seam rather than invent a parallel one). Context-sensitive work recomputes as today. | the crown; largest patch, staged behind a flag, off by default | last |
@@ -75,6 +76,38 @@ Stage order is dependency order: you cannot cache what you cannot name (0), you
 should not design against structure you have not mapped (1), and you must not
 claim savings you have not measured (2a) before building the machinery that
 banks them (2b, 2c).
+
+## Stage 0.5 — pre-compile tooling
+
+Motivation: a large estate ran months of zero-build verification on `ast-check`
+and measured exactly four gaps in what can be known before a compile; closing
+them upgrades pre-compilation verification from syntax-only to **graph-aware**,
+shrinking the "only a build can prove" class dramatically. Every rung feeds on
+stage 0's emitted module graph, stays seconds-fast, and lands as an additive
+flag — never a changed default.
+
+1. **Import-aware `ast-check`.** `ast-check` accepting a module-graph input
+   (stage 0's own JSON) so `@import("name")` resolves against the real graph:
+   missing module, missing file, unregistered import name — caught in seconds,
+   no build. Today an unresolvable named import is invisible until full
+   compilation.
+2. **Decl-existence pass ("sema-lite").** After AstGen, resolve top-level
+   declaration references across the graph *without* full semantic analysis:
+   catches call-to-nonexistent-symbol — the class syntax checking is provably
+   blind to (a build-graph change that introduced a reference to a symbol that
+   exists nowhere passes `ast-check` today and dies minutes later in the
+   compile). This is the missing middle rung between seconds-fast syntax and
+   the multi-minute full compile. Honest scope: name existence and arity-level
+   shape only — no types, no comptime; anything deeper is the compiler's job
+   and this rung says so rather than approximating it.
+3. **Batch mode with honest denominators.** N files in one invocation; summary
+   reports checked / failed / **skipped-with-reasons** so the denominator is
+   never silently smaller than the request; diagnostics available as
+   machine-readable JSON so external harnesses compose it without scraping.
+4. **Check-as-module.** Check a file *under a named module identity* from the
+   graph. The same file can lawfully live as different modules in different
+   compilations; today that duality is unverifiable before a build. This rung
+   makes "this file, as module X" a checkable claim.
 
 ## Design constraints (standing, all stages)
 

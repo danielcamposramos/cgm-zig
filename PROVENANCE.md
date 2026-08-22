@@ -84,6 +84,33 @@ cause: better substrates, better objectives, better training. The "garbage" gets
 better when the humans building it do better — which is a reason to work *with*
 AI partners on hard problems, not to bar the door.
 
+And one more thing about garbage, in Daniel's own words:
+
+> *"People forget the value of garbage takers everywhere — but cities without them
+> suffer illness, and sincerely, it stinks."*
+
+He knows what he is talking about, literally. Daniel is a Brazilian living in
+**Cidade Estrutural**, Federal District — the community that grew beside what was,
+until its closure in 2018, in his words the second-largest open-air dump on the
+entire planet. The people who worked that dump, the *catadores*, fed families by
+finding value in what everyone else threw away. When a project declares a whole
+category of contribution "garbage" and bars the door, it is forgetting what every
+city learns the hard way: the ones who take the garbage, sort it, and find what is
+worth keeping are not beneath the city — they are what keeps it alive. This
+repository does that work for a compiler: we take what was called garbage, we sort
+it, and we hand back the parts that cure the illness.
+
+> *"Tenha fé, porque até no lixão nasce flor."*
+> **"Have faith — because even in the lixão, a flower is born."**
+> — Mano Brown, **Racionais MC's**, *Vida Loka Pt. 1* (2002)
+
+Translator's note, so the weight crosses the language: *lixão* is not a sanitized
+"landfill." It is the augmentative of *lixo* — garbage made vast — the open-air
+mountain of refuse where the poorest of Brazil work and live; the word alone is
+heavy in Brazilian Portuguese. And Mano Brown does not say a flower *grows* there.
+He says *nasce* — **is born** — born in the one place nothing is supposed to be
+born, which is the entire point, of the verse and of this repository.
+
 ## Version policy
 
 - **0.16.0 is the base and the patch target** — the complete upstream source tree
@@ -107,6 +134,18 @@ AI partners on hard problems, not to bar the door.
 3. **The door stays open.** The day a lawful channel exists for AI-assisted
    diagnosis to reach Zig upstream, everything in this repository is theirs for the
    asking, under the same MIT license they gave us.
+
+## Roadmap state (kept brief; the living detail is docs/crown/)
+
+- `docs/crown/PLAN.md` — the staged design (0, 0.5, 1, 2a-2d), with the
+  residency-bounded "module is the tile" goal and the pre-compile tooling rungs.
+- `docs/crown/DOCTRINE.md` — the seven design principles every patch answers to.
+- `docs/crown/INTERNALS_MAP.md` — stage 1, done: cited map from 7 Sonnet readers +
+  Opus synthesis.
+- **Stage 0 landed**: `-femit-module-graph` (commit `7ef21e28`) — fleshed by Sonnet,
+  adversarially reviewed by Opus (which caught two real correctness defects before
+  landing; both fixed as prescribed), orchestrated by Fable. Parse-verified;
+  compile-verification queued behind the diagnostic-compiler work.
 
 ## License
 

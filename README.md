@@ -42,3 +42,9 @@ toward zero and the fork retires.
 Diagnosis and patches are the joint work of Daniel Campos Ramos and AI partners
 (Anthropic Claude models via Claude Code), recorded honestly per the project's
 multi-model credit practice. Each patch commit carries its full evidence trail.
+
+---
+
+> *"Tenha fé, porque até no lixão nasce flor."* — Mano Brown, Racionais MC's, *Vida Loka Pt. 1*
+> **"Have faith — because even in the lixão, a flower is born."**
+> (*lixão*: the vast open-air garbage mountain — see the translator's note in [`PROVENANCE.md`](PROVENANCE.md))
