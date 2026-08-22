@@ -26,3 +26,11 @@ top-level, collision-proof by name.
 
 All tools accept `--help`; `fork_status.py`, `oracle_lib.py` and
 `patches_ledger.py` accept `--self-test`.
+
+---
+*Provenance note (2026-08-22): this directory was authored by the AIF track
+(Claude Fable 5) but first landed inside commit `885fada0` — the crown track's
+rung-1 commit — because both tracks share one working tree and its commit swept
+these then-untracked files along. Nobody's work was lost; the attribution just
+needed this correction, which is itself the house style: the record gets fixed
+in the open, never rewritten.*
