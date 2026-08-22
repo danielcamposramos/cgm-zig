@@ -11,6 +11,16 @@
 //! PLAN.md`, "Design constraints" #1): `cmdAstCheck` gains only the `--module-graph=`
 //! flag parse and one call into `checkAgainstGraph` below.
 //!
+//! Stage 0.5 rung 3 (batch mode, `AstCheckBatch.zig`) reuses this file's walk instead of
+//! duplicating it: `checkAgainstGraph` here renders-and-exits on the first violation, which
+//! is correct for the single-file contract but wrong for a batch (it must keep checking the
+//! rest of the files). So the walk is split into `loadAllowedNames` (graph loading, done
+//! once and shared across every file in a batch rather than re-read per file) and
+//! `collectGraphViolations` (pure data collection into a caller-owned `ErrorBundle.Wip`, no
+//! rendering, no `process.exit`); `checkAgainstGraph` below is now a thin wrapper composing
+//! both exactly as it always did, so its behavior -- and therefore rung 1's and the
+//! single-file rung-3 byte-identity contract -- is unchanged.
+//!
 //! Honest scope, rung 1 (see `docs/crown/PLAN.md` "Stage 0.5" items 1 and 4): a named
 //! import is checked against the *graph-wide union* of every module's declared import
 //! names plus the graph's root roles -- not against the specific module the checked file
@@ -70,11 +80,29 @@ const RootDoc = struct {
 /// std/builtin/root shortcuts (nothing in the graph to check them against);
 /// `skipped_nonliteral` is sites this rung could not honestly check (non-literal or
 /// unparsable operands, wrong arity) -- reported as skipped, never folded into "checked".
-const Stats = struct {
+pub const Stats = struct {
     file_imports: usize = 0,
     named_imports: usize = 0,
     exempt: usize = 0,
     skipped_nonliteral: usize = 0,
+};
+
+/// The graph-derived lookup table `collectGraphViolations` checks names against. Split out
+/// from `checkAgainstGraph` (see this file's top comment) so a rung-3 batch run loads and
+/// builds this once, not once per file -- the graph document is invariant across an entire
+/// `--module-graph=... f1.zig f2.zig ...` invocation.
+pub const LoadedGraph = struct {
+    /// Defaulted per rung-3 review item 7: a public type crossing a module boundary should
+    /// stay forward compatible without forcing every construction site to name every field.
+    allowed_names: std.StringHashMapUnmanaged(void) = .empty,
+};
+
+/// Return value of `collectGraphViolations`: the honest-denominator `Stats` plus whether any
+/// violation was recorded into the caller's `ErrorBundle.Wip`. Defaulted per rung-3 review
+/// item 7, same reasoning as `LoadedGraph` above.
+pub const GraphCheckResult = struct {
+    stats: Stats = .{},
+    had_error: bool = false,
 };
 
 /// Loads `graph_path` and validates every `@import` in `tree` against it, then prints the
@@ -98,21 +126,81 @@ pub fn checkAgainstGraph(
     graph_path: []const u8,
     color: Color,
 ) !void {
-    const graph = loadGraph(arena, io, graph_path);
+    const loaded = try loadAllowedNames(arena, io, graph_path);
 
-    // The union of every declared import-edge name in the graph, plus the root roles
-    // (`std`, and on test builds `main`, plus the `compiler_rt`/`ubsan_rt`/`zigc` runtime
-    // roots -- see `EmitModuleGraph.zig`'s `GraphRoot` construction). This is rung 1's
-    // graph-wide semantics, documented above and in the per-violation error text.
+    var wip_errors: ErrorBundle.Wip = undefined;
+    try wip_errors.init(arena);
+    const result = try collectGraphViolations(arena, io, tree, zig_source_path, display_path, loaded, &wip_errors);
+
+    if (result.had_error) {
+        var eb = try wip_errors.toOwnedBundle("");
+        try eb.renderToStderr(io, .{}, color);
+    }
+
+    try printSummary(io, result.stats, null);
+
+    if (result.had_error) process.exit(1);
+}
+
+/// Loads `graph_path` and builds the union-of-names lookup table rung 1's semantics check
+/// against: every declared import-edge name in the graph, plus the root roles (`std`, and
+/// on test builds `main`, plus the `compiler_rt`/`ubsan_rt`/`zigc` runtime roots -- see
+/// `EmitModuleGraph.zig`'s `GraphRoot` construction). This is rung 1's graph-wide semantics,
+/// documented in `collectGraphViolations` and in the per-violation error text it emits.
+pub fn loadAllowedNames(arena: Allocator, io: Io, graph_path: []const u8) !LoadedGraph {
+    return switch (try loadAllowedNamesOrErr(arena, io, graph_path)) {
+        .ok => |loaded| loaded,
+        // Byte-identical to this function's own pre-rung-3-fix behavior: `msg` is already
+        // the exact text `fatal` used to format inline before `loadGraph` stopped calling
+        // `fatal` itself (see `loadGraph`'s doc comment below) -- this is that same call,
+        // one level up.
+        .err => |msg| fatal("{s}", .{msg}),
+    };
+}
+
+/// Result of `loadAllowedNamesOrErr`: either the loaded, ready-to-use graph, or the failure
+/// message a caller should surface (in whatever shape its own output mode requires).
+pub const LoadedGraphOutcome = union(enum) {
+    ok: LoadedGraph,
+    err: []const u8,
+};
+
+/// Same as `loadAllowedNames`, but returns the failure message instead of calling `fatal`
+/// directly -- for a caller (rung-3 batch mode, `AstCheckBatch.zig`) whose failure-reporting
+/// shape depends on its own output mode (plain-text `fatal` when human-readable, a JSON
+/// error document when `--json`; rung-3 review item 10) rather than always being a `fatal`.
+pub fn loadAllowedNamesOrErr(arena: Allocator, io: Io, graph_path: []const u8) !LoadedGraphOutcome {
+    return switch (try loadGraph(arena, io, graph_path)) {
+        .ok => |graph| .{ .ok = try buildLoadedGraph(arena, graph) },
+        .err => |msg| .{ .err = msg },
+    };
+}
+
+fn buildLoadedGraph(arena: Allocator, graph: GraphDoc) Allocator.Error!LoadedGraph {
     var allowed_names: std.StringHashMapUnmanaged(void) = .empty;
     for (graph.modules) |m| for (m.deps) |d| try allowed_names.put(arena, d.import_name, {});
     for (graph.roots) |r| try allowed_names.put(arena, r.role, {});
+    return .{ .allowed_names = allowed_names };
+}
 
+/// Walks every `@import` site in `tree` and validates it against `loaded`, recording any
+/// violation into the caller-owned, already-`init`ed `wip_errors` -- no rendering, no
+/// `process.exit`, so a caller that must keep going after a violation (the rung-3 batch
+/// path) can. `checkAgainstGraph` above is the single-file caller that renders+exits to
+/// preserve its established byte-identical contract.
+pub fn collectGraphViolations(
+    arena: Allocator,
+    io: Io,
+    tree: Ast,
+    zig_source_path: []const u8,
+    display_path: []const u8,
+    loaded: LoadedGraph,
+    wip_errors: *ErrorBundle.Wip,
+) !GraphCheckResult {
+    const allowed_names = loaded.allowed_names;
     const checked_dir = std.fs.path.dirname(zig_source_path) orelse ".";
 
     var stats: Stats = .{};
-    var wip_errors: ErrorBundle.Wip = undefined;
-    try wip_errors.init(arena);
     var had_error = false;
 
     const node_count: u32 = @intCast(tree.nodes.len);
@@ -160,7 +248,7 @@ pub fn checkAgainstGraph(
             const resolved = try std.fs.path.join(arena, &.{ checked_dir, import_path });
             Io.Dir.cwd().access(io, resolved, .{}) catch {
                 had_error = true;
-                try addImportError(&wip_errors, tree, display_path, operand, "@import of relative file that does not exist on disk: '{s}' (resolved path: '{s}')", .{ import_path, resolved });
+                try addImportError(wip_errors, tree, display_path, operand, "@import of relative file that does not exist on disk: '{s}' (resolved path: '{s}')", .{ import_path, resolved });
             };
         } else if (mem.eql(u8, import_path, "std") or mem.eql(u8, import_path, "builtin") or mem.eql(u8, import_path, "root")) {
             // Special-cased shortcuts: never present in `Package.Module.deps` (see
@@ -172,19 +260,12 @@ pub fn checkAgainstGraph(
             stats.named_imports += 1;
             if (!allowed_names.contains(import_path)) {
                 had_error = true;
-                try addImportError(&wip_errors, tree, display_path, operand, "unregistered module import name: '{s}' is not declared as an import edge anywhere in the module graph (rung-1 semantics: this checks the graph-wide union of every module's import names, not the specific module this file belongs to -- per-module strict matching arrives with --as-module, stage 0.5 rung 4)", .{import_path});
+                try addImportError(wip_errors, tree, display_path, operand, "unregistered module import name: '{s}' is not declared as an import edge anywhere in the module graph (rung-1 semantics: this checks the graph-wide union of every module's import names, not the specific module this file belongs to -- per-module strict matching arrives with --as-module, stage 0.5 rung 4)", .{import_path});
             }
         }
     }
 
-    if (had_error) {
-        var eb = try wip_errors.toOwnedBundle("");
-        try eb.renderToStderr(io, .{}, color);
-    }
-
-    try printSummary(io, stats);
-
-    if (had_error) process.exit(1);
+    return .{ .stats = stats, .had_error = had_error };
 }
 
 fn addImportError(
@@ -215,11 +296,22 @@ fn addImportError(
 /// The one summary line the plan requires (doctrine 4, self-report): printed at the end of
 /// every graph-checked run, pass or fail, so the operator never has to infer what was
 /// actually checked from the presence or absence of errors alone.
-fn printSummary(io: Io, stats: Stats) !void {
+///
+/// `pub` since rung 3 (`AstCheckBatch.zig`) reuses it verbatim for each graph-checked file
+/// in a batch's human-readable (non-`--json`) output, instead of re-deriving the same
+/// format string a second time.
+///
+/// `path_prefix`, when non-null, prefixes the line with `"<path>: "` -- rung-3 batch mode
+/// passes its own file path here so this line is attributable at N>1 files (rung-3 review
+/// item 6: bare, this was the one line in batch output with no path attribution at all,
+/// unlike every other batch-mode line). The single-file caller (`checkAgainstGraph` above)
+/// passes `null`, preserving its own byte-identical output exactly.
+pub fn printSummary(io: Io, stats: Stats, path_prefix: ?[]const u8) !void {
     var buffer: [256]u8 = undefined;
     const locked = try io.lockStderr(&buffer, null);
     defer io.unlockStderr();
     const w = &locked.file_writer.interface;
+    if (path_prefix) |p| try w.print("{s}: ", .{p});
     try w.print(
         "import sites seen {d}: validated {d} (file {d}, named {d}), exempt(std/builtin/root) {d}, skipped-unchecked {d}\n",
         .{
@@ -234,26 +326,42 @@ fn printSummary(io: Io, stats: Stats) !void {
     try w.flush();
 }
 
+/// Result of the low-level graph read+parse: either the decoded document, or an
+/// already-formatted failure message. Returning the message as data rather than calling
+/// `fatal` (as this function did before the rung-3 fix) keeps the three distinct wordings
+/// (open/read/parse) in this one place, so every caller -- the byte-identical single-file
+/// `fatal` path and the `--json`-aware batch path alike -- reports the exact same text for
+/// the exact same failure (rung-3 review item 10).
+const GraphLoadResult = union(enum) {
+    ok: GraphDoc,
+    err: []const u8,
+};
+
 /// Reads and parses the stage-0 module-graph JSON document. Any failure here -- the file
-/// cannot be opened, or its contents are not the expected JSON shape -- is a named fatal
-/// error: the check the operator asked for cannot run at all, so it must never look like a
-/// silent pass (doctrine 2, present-or-refuse-by-name).
-fn loadGraph(arena: Allocator, io: Io, graph_path: []const u8) GraphDoc {
+/// cannot be opened, or its contents are not the expected JSON shape -- is a named failure
+/// (doctrine 2, present-or-refuse-by-name): the check the operator asked for cannot run at
+/// all, so it must never look like a silent pass. Returns the failure as data (`.err`)
+/// rather than calling `process.fatal` itself, so a `--json` caller can report it as a JSON
+/// document instead of unconditional stderr text; see `loadAllowedNames`/
+/// `loadAllowedNamesOrErr` above for the two ways a caller turns this back into the
+/// byte-identical `fatal` behavior this function used to provide directly.
+fn loadGraph(arena: Allocator, io: Io, graph_path: []const u8) Allocator.Error!GraphLoadResult {
     var f = Io.Dir.cwd().openFile(io, graph_path, .{}) catch |err| {
-        fatal("unable to open module graph '{s}' for --module-graph: {t}", .{ graph_path, err });
+        return .{ .err = try std.fmt.allocPrint(arena, "unable to open module graph '{s}' for --module-graph: {t}", .{ graph_path, err }) };
     };
     defer f.close(io);
     var read_buffer: [4096]u8 = undefined;
     var file_reader: Io.File.Reader = f.reader(io, &read_buffer);
     const json = std.zig.readSourceFileToEndAlloc(arena, &file_reader) catch |err| {
-        fatal("unable to read module graph '{s}' for --module-graph: {t}", .{ graph_path, err });
+        return .{ .err = try std.fmt.allocPrint(arena, "unable to read module graph '{s}' for --module-graph: {t}", .{ graph_path, err }) };
     };
     // `ignore_unknown_fields`: see `GraphDoc`'s doc comment. Note also the inherited
     // caveat from `EmitModuleGraph.zig`'s doc comment -- a non-UTF-8 name anywhere in the
     // document changes that field's JSON type from string to an int-array, which this
     // subset schema does not special-case; such a document fails to parse here and is
-    // reported through this same named-fatal path rather than silently mis-decoded.
-    return std.json.parseFromSliceLeaky(GraphDoc, arena, json, .{ .ignore_unknown_fields = true }) catch |err| {
-        fatal("malformed module-graph JSON '{s}' for --module-graph: {t}", .{ graph_path, err });
+    // reported through this same named-failure path rather than silently mis-decoded.
+    const doc = std.json.parseFromSliceLeaky(GraphDoc, arena, json, .{ .ignore_unknown_fields = true }) catch |err| {
+        return .{ .err = try std.fmt.allocPrint(arena, "malformed module-graph JSON '{s}' for --module-graph: {t}", .{ graph_path, err }) };
     };
+    return .{ .ok = doc };
 }

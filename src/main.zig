@@ -34,6 +34,7 @@ const Zcu = @import("Zcu.zig");
 const mingw = @import("libs/mingw.zig");
 const dev = @import("dev.zig");
 const AstCheckImports = @import("AstCheckImports.zig");
+const AstCheckBatch = @import("AstCheckBatch.zig");
 
 test {
     _ = Package;
@@ -6299,21 +6300,47 @@ fn parseCodeModel(arg: []const u8) std.builtin.CodeModel {
 }
 
 const usage_ast_check =
-    \\Usage: zig ast-check [file]
+    \\Usage: zig ast-check [file...]
     \\
-    \\    Given a .zig source file or .zon file, reports any compile errors
-    \\    that can be ascertained on the basis of the source code alone,
-    \\    without target information or type checking.
+    \\    Given one or more .zig or .zon source files, reports any compile
+    \\    errors that can be ascertained on the basis of the source code
+    \\    alone, without target information or type checking.
     \\
-    \\    If [file] is omitted, stdin is used.
+    \\    If no [file] is given, stdin is used (a single input only; this
+    \\    mode does not batch). Given exactly one [file] and no --json, the
+    \\    check itself (parsing, diagnostics, and exit code) is
+    \\    byte-identical to upstream `ast-check`; this help text is not (it
+    \\    now documents --json, --module-graph, and batch mode below, and
+    \\    upstream's "extra positional parameter" refusal is superseded --
+    \\    multiple positionals now run batch mode instead of being refused).
+    \\    Given 2+ files, or one file with --json, batch mode runs the same
+    \\    pipeline independently per file: an unopenable/unreadable file is
+    \\    skipped with its reason rather than aborting the rest, and one
+    \\    summary line is printed to stderr: "files: requested R, checked C,
+    \\    failed F, skipped S" (R = C + F + S always). A path repeated in
+    \\    argv is checked -- and counted -- once per occurrence, not once
+    \\    per unique file. Exit is nonzero iff F>0 or S>0 (Crown stage 0.5
+    \\    rung 3).
+    \\
+    \\    --json output may contain a `path`, `msg`, or `reason` field as a
+    \\    JSON array of integers instead of a string: std.json.Stringify
+    \\    falls back to that shape for any non-UTF-8 byte sequence (argv
+    \\    paths are arbitrary bytes on POSIX), matching
+    \\    -femit-module-graph's own documented caveat. Consumers must
+    \\    tolerate it.
     \\
     \\Options:
     \\  -h, --help            Print this help and exit
     \\  --color [auto|off|on] Enable or disable colored error messages
-    \\  --zon                 Treat the input file as ZON, regardless of file extension
-    \\  -t                    (debug option) Output ZIR in text form to stdout
+    \\  --zon                 Treat the input file(s) as ZON, regardless of file extension
+    \\  -t                    (debug option) Output ZIR in text form to stdout; only valid
+    \\                        with exactly one [file] and no --json
     \\  --module-graph=<path> Also validate @import operands against a stage-0 module
     \\                        graph (Crown stage 0.5 rung 1; requires [file], not stdin)
+    \\  --json                Emit per-file diagnostics and the batch summary as one
+    \\                        machine-readable JSON document to stdout instead of the
+    \\                        human-readable rendering (Crown stage 0.5 rung 3; valid
+    \\                        with a single file too)
     \\
     \\
 ;
@@ -6326,7 +6353,16 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
     var color: Color = .auto;
     var want_output_text = false;
     var force_zon = false;
+    // Crown stage 0.5 rung 3 (docs/crown/PLAN.md): emit machine-readable JSON (per-file
+    // diagnostics + the batch summary) to stdout instead of the human rendering. Valid with
+    // a single file too, not only in batch mode.
+    var want_json = false;
     var zig_source_path: ?[]const u8 = null;
+    // Crown stage 0.5 rung 3: every positional argument is a requested file. Collected as a
+    // list so the dispatch below can tell "one file" from "many" -- the single-file,
+    // non-`--json` case still assigns into `zig_source_path` and falls through to the
+    // pre-existing code beneath this function untouched, for the byte-identical contract.
+    var file_paths: std.ArrayList([]const u8) = .empty;
     // Crown stage 0.5 rung 1 (docs/crown/PLAN.md): additive, off by default. Non-null only
     // when the operator opts in; see `AstCheckImports.checkAgainstGraph`.
     var module_graph_path: ?[]const u8 = null;
@@ -6342,6 +6378,8 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
                 want_output_text = true;
             } else if (mem.eql(u8, arg, "--zon")) {
                 force_zon = true;
+            } else if (mem.eql(u8, arg, "--json")) {
+                want_json = true;
             } else if (mem.cutPrefix(u8, arg, "--module-graph=")) |rest| {
                 module_graph_path = rest;
             } else if (mem.eql(u8, arg, "--color")) {
@@ -6356,11 +6394,54 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
             } else {
                 fatal("unrecognized parameter: '{s}'", .{arg});
             }
-        } else if (zig_source_path == null) {
-            zig_source_path = arg;
         } else {
-            fatal("extra positional parameter: '{s}'", .{arg});
+            try file_paths.append(arena, arg);
         }
+    }
+
+    // Crown stage 0.5 rung 3 dispatch. Exactly one file with no --json assigns
+    // `zig_source_path` and falls through to the code below completely unmodified -- that
+    // is the whole byte-identity proof: same variable, same downstream code, nothing new on
+    // this path. Zero files (stdin) likewise falls through with `zig_source_path` left
+    // null, exactly as before, plus one new named refusal for `--json` (doctrine 2: a flag
+    // is never silently ignored) since stdin has no path to report in a JSON document.
+    // Every other shape -- 2+ files, or 1 file with --json -- is rung 3's batch mode,
+    // dispatched to `AstCheckBatch.run` and never falls through to the code below.
+    if (file_paths.items.len == 0) {
+        if (want_json) {
+            fatal("--json requires at least one [file]; stdin has no path to report in the JSON document", .{});
+        }
+    } else if (file_paths.items.len == 1 and !want_json) {
+        zig_source_path = file_paths.items[0];
+    } else {
+        // -t streams ZIR text to stdout; batch mode either interleaves N such streams
+        // meaninglessly, or collides with --json's own stdout document. Named fatal either
+        // way (doctrine 2) rather than picking a silently-surprising precedence between them.
+        if (want_output_text) {
+            if (file_paths.items.len > 1) {
+                fatal("-t (ZIR text dump) does not support multiple files: streams would interleave meaninglessly; run 'zig ast-check -t' on one file at a time", .{});
+            } else {
+                fatal("-t (ZIR text dump) is not supported together with --json: both target stdout", .{});
+            }
+        }
+        // Reaching this branch with exactly one file means `want_json` is true (the other
+        // single-file shape took the `else if` above). --module-graph on a lone `.zon` file
+        // is refused below (module_graph_path != null and mode == .zon) on the untouched,
+        // non---json path; --json must hit that SAME named refusal rather than silently
+        // dispatching to batch mode and doing nothing on the axis the operator asked about
+        // -- an output-format flag must not delete a semantic refusal (rung-3 review item
+        // 3(a); a 2+-file batch that mixes in a `.zon` member instead surfaces this per-file
+        // via `JsonFile.graph_check` / the batch summary's `graph_not_applicable` count, see
+        // `AstCheckBatch.zig`, since the batch as a whole must not abort for other files'
+        // sake).
+        if (module_graph_path != null and file_paths.items.len == 1) {
+            const only_path = file_paths.items[0];
+            const only_mode: Ast.Mode = if (force_zon or mem.endsWith(u8, only_path, ".zon")) .zon else .zig;
+            if (only_mode == .zon) {
+                fatal("--module-graph requires a Zig source file; ZON has no imports to validate", .{});
+            }
+        }
+        return AstCheckBatch.run(arena, io, file_paths.items, color, force_zon, module_graph_path, want_json);
     }
 
     // --module-graph resolves relative file imports against the checked file's directory,
