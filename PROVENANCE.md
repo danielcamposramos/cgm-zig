@@ -135,6 +135,18 @@ born, which is the entire point, of the verse and of this repository.
    diagnosis to reach Zig upstream, everything in this repository is theirs for the
    asking, under the same MIT license they gave us.
 
+## Roadmap state (kept brief; the living detail is docs/crown/)
+
+- `docs/crown/PLAN.md` — the staged design (0, 0.5, 1, 2a-2d), with the
+  residency-bounded "module is the tile" goal and the pre-compile tooling rungs.
+- `docs/crown/DOCTRINE.md` — the seven design principles every patch answers to.
+- `docs/crown/INTERNALS_MAP.md` — stage 1, done: cited map from 7 Sonnet readers +
+  Opus synthesis.
+- **Stage 0 landed**: `-femit-module-graph` (commit `7ef21e28`) — fleshed by Sonnet,
+  adversarially reviewed by Opus (which caught two real correctness defects before
+  landing; both fixed as prescribed), orchestrated by Fable. Parse-verified;
+  compile-verification queued behind the diagnostic-compiler work.
+
 ## License
 
 Upstream Zig is MIT-licensed; that license (`LICENSE`) is preserved unmodified and
