@@ -122,6 +122,7 @@ pub const Env = enum {
                 .dump_zir_command,
                 .llvm_ints_command,
                 .docs_emit,
+                .module_graph_emit,
                 // Avoid dragging networking into zig2.c because it adds dependencies on some
                 // linker symbols that are annoying to satisfy while bootstrapping.
                 .network_listen,
@@ -256,6 +257,7 @@ pub const Feature = enum {
     llvm_ints_command,
 
     docs_emit,
+    module_graph_emit,
     stdio_listen,
     network_listen,
     build_import_lib,

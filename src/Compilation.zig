@@ -44,6 +44,7 @@ const Air = @import("Air.zig");
 const Builtin = @import("Builtin.zig");
 const LlvmObject = @import("codegen/llvm.zig").Object;
 const dev = @import("dev.zig");
+const EmitModuleGraph = @import("Compilation/EmitModuleGraph.zig");
 
 pub const Config = @import("Compilation/Config.zig");
 
@@ -290,6 +291,15 @@ emit_llvm_bc: ?[]const u8,
 /// Does not change for the lifetime of this `Compilation`.
 /// Cwd-relative if `cache_use == .none`. Otherwise, relative to our subdirectory in the cache.
 emit_docs: ?[]const u8,
+/// Non-`null` iff we are emitting the module graph JSON (Crown stage 0; `-femit-module-graph`).
+/// Does not change for the lifetime of this `Compilation`.
+/// Cwd-relative if `cache_use == .none`. Otherwise, relative to our subdirectory in the cache.
+emit_module_graph: ?[]const u8,
+/// Set by `create()` right after `pt.populateModuleRootTable()`, when `emit_module_graph`
+/// is non-null and there is a `Zcu`. Null otherwise. See
+/// `Compilation/EmitModuleGraph.zig` for why building this JSON and writing it to disk
+/// happen at two different points in the `Compilation` lifecycle.
+module_graph_json: ?[]const u8 = null,
 
 const QueuedJobs = struct {
     /// hack for stage2_x86_64 + coff
@@ -1348,6 +1358,7 @@ pub const MiscTask = enum {
     link_depfile,
     docs_copy,
     docs_wasm,
+    module_graph_emit,
 
     @"musl crt1.o",
     @"musl rcrt1.o",
@@ -1608,6 +1619,7 @@ pub const CreateOptions = struct {
     emit_llvm_ir: Emit = .no,
     emit_llvm_bc: Emit = .no,
     emit_docs: Emit = .no,
+    emit_module_graph: Emit = .no,
     /// This field is intended to be removed.
     /// The ELF implementation no longer uses this data, however the MachO and COFF
     /// implementations still do.
@@ -2149,6 +2161,7 @@ pub fn create(gpa: Allocator, arena: Allocator, io: Io, diag: *CreateDiagnostic,
         cache.hash.add(options.emit_llvm_ir != .no);
         cache.hash.add(options.emit_llvm_bc != .no);
         cache.hash.add(options.emit_docs != .no);
+        cache.hash.add(options.emit_module_graph != .no);
         // TODO audit this and make sure everything is in it
 
         const main_mod = options.main_mod orelse options.root_mod;
@@ -2295,6 +2308,7 @@ pub fn create(gpa: Allocator, arena: Allocator, io: Io, diag: *CreateDiagnostic,
             .emit_llvm_ir = try options.emit_llvm_ir.resolve(arena, &options, .llvm_ir),
             .emit_llvm_bc = try options.emit_llvm_bc.resolve(arena, &options, .llvm_bc),
             .emit_docs = try options.emit_docs.resolve(arena, &options, .docs),
+            .emit_module_graph = try options.emit_module_graph.resolve(arena, &options, .module_graph),
             .environ_map = options.environ_map,
         };
 
@@ -2321,6 +2335,16 @@ pub fn create(gpa: Allocator, arena: Allocator, io: Io, diag: *CreateDiagnostic,
                 error.OutOfMemory => |e| return e,
                 error.IllegalZigImport => return diag.fail(.illegal_zig_import),
             };
+
+            // Crown stage 0 (docs/crown/PLAN.md; INTERNALS_MAP.md 5.3 "Site A"): the
+            // module graph is complete right here -- `zcu.module_roots` now has every
+            // module -- and no analysis has run, so this is the cheapest point to
+            // capture it. Only builds the JSON string; see
+            // `Compilation/EmitModuleGraph.zig` for why the file write happens later.
+            if (comp.emit_module_graph != null) {
+                dev.check(.module_graph_emit);
+                comp.module_graph_json = try EmitModuleGraph.buildJson(arena, comp, zcu);
+            }
         }
 
         const lf_open_opts: link.File.OpenOptions = .{
@@ -4509,6 +4533,14 @@ fn performAllTheWork(
         dev.check(.docs_emit);
         misc_group.async(io, workerDocsCopy, .{comp});
         misc_group.async(io, workerDocsWasm, .{ comp, main_progress_node });
+    }
+
+    if (comp.emit_module_graph != null) {
+        // The JSON itself was already built at the `create()` hook site; `cache_use` is
+        // populated by now, so it's safe to resolve the emit path and write it out. See
+        // `Compilation/EmitModuleGraph.zig`.
+        dev.check(.module_graph_emit);
+        misc_group.async(io, EmitModuleGraph.worker, .{comp});
     }
 
     defer if (comp.zcu) |zcu| zcu.codegen_task_pool.cancel(zcu);

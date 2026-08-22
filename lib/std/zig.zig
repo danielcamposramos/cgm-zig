@@ -987,6 +987,10 @@ pub const EmitArtifact = enum {
     pdb,
     h,
     compiler_rt_dyn_lib,
+    // Fork addition (Crown stage 0). Appended last so every upstream member keeps its
+    // ordinal — no in-tree consumer is ordinal-sensitive today, but appending is the
+    // strictly-lower-risk edit for a fork that tracks upstream.
+    module_graph,
 
     /// If using `Server` to communicate with the compiler, it will place requested artifacts in
     /// paths under the output directory, where those paths are named according to this function.
@@ -1004,6 +1008,7 @@ pub const EmitArtifact = enum {
             .pdb => ".pdb",
             .h => ".h",
             .compiler_rt_dyn_lib => unreachable,
+            .module_graph => "-module-graph.json",
         };
         return std.fmt.allocPrint(gpa, "{s}{s}", .{ opts.root_name, suffix });
     }
