@@ -148,6 +148,10 @@ alive_files: std.AutoArrayHashMapUnmanaged(File.Index, File.Reference) = .empty,
 /// should be alive (because the user has messed up their imports somewhere!).
 /// Cleared and recomputed every update, after AstGen and before Sema.
 multi_module_err: ?struct {
+    /// The double-owned file itself: the one both `modules` claim, and the one the user
+    /// must fix. Never one of its importers; `modules` and `refs` are claims on *this*
+    /// file, and the diagnostic anchors its root message here, so an importer in this
+    /// field misdirects the entire report.
     file: File.Index,
     modules: [2]*Package.Module,
     refs: [2]File.Reference,

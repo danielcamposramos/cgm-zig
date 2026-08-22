@@ -126,9 +126,12 @@ pub fn addCases(ctx: *Cases, b: *std.Build) !void {
             \\    _ = @import("foo.zig");
             \\}
         , &[_][]const u8{
-            ":1:1: error: file exists in modules 'foo' and 'root'",
-            ":1:1: note: files must belong to only one module",
-            ":1:1: note: file is the root of module 'foo'",
+            // The path is spelled out rather than left as a bare ":1:1:": the whole point
+            // of this diagnostic is *which* file is double-owned, so a path-agnostic
+            // expectation here cannot tell the culprit from one of its importers.
+            "foo.zig:1:1: error: file exists in modules 'foo' and 'root'",
+            "foo.zig:1:1: note: files must belong to only one module",
+            "foo.zig:1:1: note: file is the root of module 'foo'",
             ":3:17: note: file is imported here by the root of module 'root'",
         });
         case.addSourceFile("foo.zig",
