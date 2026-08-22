@@ -2699,8 +2699,17 @@ fn computeAliveFiles(pt: Zcu.PerThread) Allocator.Error!bool {
                     // the problem "begins". Any compilation with a multi-module file is likely to
                     // have a huge number of them by transitive imports, so just reporting this one
                     // hopefully keeps the error focused.
+                    // The reported file is `res.file`: the file both modules claim, and the
+                    // one the user has to fix. It is *not* `file_idx`, which is merely
+                    // whichever importer we happened to be scanning when the conflict
+                    // surfaced -- `modules` and `refs` below are both claims on `res.file`,
+                    // and `addFileInMultipleModulesError` anchors its root message on this
+                    // field, so naming the importer here sends the reader into an innocent
+                    // file and never names the double-owned one anywhere in the report. On a
+                    // large hyper-modular build that left the actual culprit recoverable only
+                    // by hand-parsing the compilation's `-M` module definitions.
                     zcu.multi_module_err = .{
-                        .file = file_idx,
+                        .file = res.file,
                         .modules = .{ imported_file.mod.?, imported_mod },
                         .refs = .{ gop.value_ptr.*, imported_ref },
                     };
