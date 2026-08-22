@@ -1,5 +1,12 @@
 # cgm-zig — a patched fork of Zig 0.16.0
 
+> *"This repository exists to deposit AI garbage that actually makes Zig better and
+> works with hyper-modular code."*
+> — Daniel Campos Ramos, founder, EchoSystems AI Studios, 2026-08-22
+> (with a nod to the Zig president's assessment that AI-assisted contributions are
+> "invariably garbage" — the full story, and the full credit chain, live in
+> [`PROVENANCE.md`](PROVENANCE.md))
+
 Maintained by **EchoSystems AI Studios** (Daniel Campos Ramos) as a build-station
 toolchain fork. Upstream: [Zig](https://ziglang.org) 0.16.0, imported verbatim from
 `zig-0.16.0.tar.xz` (sha256 `43186959edc87d5c7a1be7b7d2a25efffd22ce5807c7af99067f86f99641bfdf`).
