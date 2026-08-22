@@ -6314,6 +6314,9 @@ const usage_ast_check =
     \\  -t                    (debug option) Output ZIR in text form to stdout
     \\  --module-graph=<path> Also validate @import operands against a stage-0 module
     \\                        graph (Crown stage 0.5 rung 1; requires [file], not stdin)
+    \\  --check-decls         Also resolve top-level declaration references reached via
+    \\                        @import (Crown stage 0.5 rung 2, "sema-lite"; requires
+    \\                        --module-graph)
     \\
     \\
 ;
@@ -6330,6 +6333,10 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
     // Crown stage 0.5 rung 1 (docs/crown/PLAN.md): additive, off by default. Non-null only
     // when the operator opts in; see `AstCheckImports.checkAgainstGraph`.
     var module_graph_path: ?[]const u8 = null;
+    // Crown stage 0.5 rung 2 (docs/crown/PLAN.md): additive, off by default, and only
+    // meaningful alongside rung 1 (it resolves references reached through the same graph
+    // rung 1 loads) -- validated just below the arg-parse loop.
+    var check_decls = false;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -6344,6 +6351,8 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
                 force_zon = true;
             } else if (mem.cutPrefix(u8, arg, "--module-graph=")) |rest| {
                 module_graph_path = rest;
+            } else if (mem.eql(u8, arg, "--check-decls")) {
+                check_decls = true;
             } else if (mem.eql(u8, arg, "--color")) {
                 if (i + 1 >= args.len) {
                     fatal("expected [auto|on|off] after --color", .{});
@@ -6368,6 +6377,13 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
     // skipping the requested check or resolving against an arbitrary cwd guess.
     if (module_graph_path != null and zig_source_path == null) {
         fatal("--module-graph requires [file] (relative imports need a directory to resolve against; stdin has none)", .{});
+    }
+
+    // --check-decls (Crown stage 0.5 rung 2) resolves references reached through the same
+    // module graph rung 1 loads; without --module-graph there is no graph to resolve
+    // against. Named fatal (doctrine 2) rather than silently running rung 1 alone.
+    if (check_decls and module_graph_path == null) {
+        fatal("--check-decls requires --module-graph (Crown stage 0.5 rung 2 resolves references through rung 1's graph)", .{});
     }
 
     const display_path = zig_source_path orelse "<stdin>";
@@ -6428,7 +6444,7 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
             // to upstream ast-check.
             if (module_graph_path) |graph_path| {
                 if (!zir.hasCompileErrors()) {
-                    try AstCheckImports.checkAgainstGraph(arena, io, tree, zig_source_path.?, display_path, graph_path, color);
+                    try AstCheckImports.checkAgainstGraph(arena, io, tree, zig_source_path.?, display_path, graph_path, color, check_decls);
                 }
             }
 
