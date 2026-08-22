@@ -101,8 +101,15 @@ repository does that work for a compiler: we take what was called garbage, we so
 it, and we hand back the parts that cure the illness.
 
 > *"Tenha fé, porque até no lixão nasce flor."*
-> ("Have faith, because even in the dump, a flower grows.")
+> **"Have faith — because even in the lixão, a flower is born."**
 > — Mano Brown, **Racionais MC's**, *Vida Loka Pt. 1* (2002)
+
+Translator's note, so the weight crosses the language: *lixão* is not a sanitized
+"landfill." It is the augmentative of *lixo* — garbage made vast — the open-air
+mountain of refuse where the poorest of Brazil work and live; the word alone is
+heavy in Brazilian Portuguese. And Mano Brown does not say a flower *grows* there.
+He says *nasce* — **is born** — born in the one place nothing is supposed to be
+born, which is the entire point, of the verse and of this repository.
 
 ## Version policy
 
