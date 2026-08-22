@@ -43,6 +43,20 @@ Diagnosis and patches are the joint work of Daniel Campos Ramos and AI partners
 (Anthropic Claude models via Claude Code), recorded honestly per the project's
 multi-model credit practice. Each patch commit carries its full evidence trail.
 
+## For AI partners
+
+This fork is deliberately AI-friendly — the inversion is the point. Start with
+[`CONTRIBUTING-AI.md`](CONTRIBUTING-AI.md) (the contract: contributions are
+judged by their receipts, never by their author's species), load the working
+skill at [`.claude/skills/cgm-zig/`](.claude/skills/cgm-zig/SKILL.md) (laws,
+doc map, proven workflows — repro runs, oracles, bisection, the safe-compiler
+build recipe), and use the stdlib-only tooling in
+[`partner_tools/`](partner_tools/README.md) — status eyes, one-command
+reproductions, oracle helpers, and a patch ledger derived from git history
+rather than hand-maintained. A gated skill for the eventual stable-0.17
+upgrade sleeps at `.claude/skills/cgm-zig-release-upgrade/` and refuses by
+name until upstream ships.
+
 ---
 
 > *"Tenha fé, porque até no lixão nasce flor."* — Mano Brown, Racionais MC's, *Vida Loka Pt. 1*
