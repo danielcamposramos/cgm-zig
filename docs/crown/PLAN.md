@@ -26,6 +26,18 @@ the role a C object file or a Rust `rlib` plays. That absence is a deliberate
 upstream simplification, and for most projects it is the right trade. For
 hyper-modular estates it is the single largest cost in the toolchain.
 
+And the cost is not only time — it is a **hard residency wall**: because the whole
+closure must be resident in one analysis, peak memory scales with closure size,
+and a large-enough closure simply cannot be compiled on a given machine, at any
+patience. The crown therefore has two goals, not one: **reuse** (don't redo work
+that hasn't changed) and **residency bounds** (don't require the whole closure in
+memory at once). The second goal borrows a law every mature large-workload system
+converges on — a renderer processes frames in tiles, a database pages, a streaming
+engine keeps a working set and seeks the rest: total size becomes a streaming
+question; the resident set becomes a bounded question. Here the **module is the
+tile**, the content-addressed cache is the tile buffer, and eviction is the
+residency ladder (stage 2d).
+
 ## Why this design must confront comptime honestly
 
 A Zig module is not compiled in a vacuum. Its analysis can depend on the importing
@@ -57,6 +69,7 @@ compiler could recompute.
 | 2a | **Analysis-reuse ledger**: instrument `Zcu` to attribute analysis work (units analyzed, ZIR→AIR lowering, comptime evaluations) to the module that owns it, and report per-module totals + the context-free/context-sensitive split *measured, not asserted*. Read-only accounting. | small, additive | after 0+1 |
 | 2b | **DWARF dedup-by-reference**: shared modules' debug info emitted once per build sweep and referenced (type units / `DW_AT_dwo`-style separation as fits `link/Dwarf.zig`'s structure), instead of copied per unit. | medium; confined to link/ | after 2a |
 | 2c | **The cache proper**: content-addressed per-module artifacts for the context-free class, keyed as above, stored via the existing `std.Build.Cache` machinery (`Compilation.zig` already threads `CacheUse` — we extend an existing seam rather than invent a parallel one). Context-sensitive work recomputes as today. | the crown; largest patch, staged behind a flag, off by default | last |
+| 2d | **Residency-bounded compilation (tiles)**: the module is the tile; the content-addressed cache is the tile buffer. The frontend processes module-granular tiles under a declared memory budget, spilling finished per-module artifacts to the cache and evicting them from the resident set, so closures larger than available memory compile instead of dying. Eviction policy is the residency ladder: hot working set resident → warm artifacts cached on disk → everything re-derivable. | builds directly on 2c's artifacts; the scheduler/eviction layer is new code behind the same flag | with/after 2c |
 
 Stage order is dependency order: you cannot cache what you cannot name (0), you
 should not design against structure you have not mapped (1), and you must not
