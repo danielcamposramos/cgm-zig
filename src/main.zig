@@ -6337,6 +6337,20 @@ const usage_ast_check =
     \\                        with exactly one [file] and no --json
     \\  --module-graph=<path> Also validate @import operands against a stage-0 module
     \\                        graph (Crown stage 0.5 rung 1; requires [file], not stdin)
+    \\  --as-module=<name-or-index>
+    \\                        Bind the checked file to exactly one module from the graph
+    \\                        (its fully_qualified_name, or its numeric ModuleNode index
+    \\                        if the name is ambiguous or unknown), upgrading two checks
+    \\                        from --module-graph's advisory graph-wide semantics to the
+    \\                        compiler's own strict, per-module ones: named imports are
+    \\                        checked against exactly that module's declared deps (not
+    \\                        every module's union), and file imports (.zig/.zon) are
+    \\                        additionally sandbox-checked against the module's own root
+    \\                        directory, matching Package/Module.zig's own contract that
+    \\                        only files inside that directory can be imported (Crown
+    \\                        stage 0.5 rung 4). Requires --module-graph=<path>; invalid
+    \\                        alone. In batch mode, one --as-module binds ALL .zig
+    \\                        members of the batch -- there is no per-file binding.
     \\  --json                Emit per-file diagnostics and the batch summary as one
     \\                        machine-readable JSON document to stdout instead of the
     \\                        human-readable rendering (Crown stage 0.5 rung 3; valid
@@ -6366,6 +6380,10 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
     // Crown stage 0.5 rung 1 (docs/crown/PLAN.md): additive, off by default. Non-null only
     // when the operator opts in; see `AstCheckImports.checkAgainstGraph`.
     var module_graph_path: ?[]const u8 = null;
+    // Crown stage 0.5 rung 4 (docs/crown/PLAN.md): additive, off by default. Non-null only
+    // when the operator opts in; valid only alongside `module_graph_path` -- refused below,
+    // right after the parse loop, if given alone. See `AstCheckImports.resolveAsModule`.
+    var as_module_spec: ?[]const u8 = null;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -6382,6 +6400,8 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
                 want_json = true;
             } else if (mem.cutPrefix(u8, arg, "--module-graph=")) |rest| {
                 module_graph_path = rest;
+            } else if (mem.cutPrefix(u8, arg, "--as-module=")) |rest| {
+                as_module_spec = rest;
             } else if (mem.eql(u8, arg, "--color")) {
                 if (i + 1 >= args.len) {
                     fatal("expected [auto|on|off] after --color", .{});
@@ -6397,6 +6417,14 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
         } else {
             try file_paths.append(arena, arg);
         }
+    }
+
+    // Crown stage 0.5 rung 4: --as-module has no meaning without a graph to resolve it
+    // against. Named fatal (doctrine 2) rather than silently ignoring it, checked once
+    // here so every downstream path (single-file, batch, --json) inherits the refusal
+    // uniformly instead of each needing its own copy of this check.
+    if (as_module_spec != null and module_graph_path == null) {
+        fatal("--as-module requires --module-graph=<path> (it binds the checked file to a module from a graph; there is no graph to bind against without one)", .{});
     }
 
     // Crown stage 0.5 rung 3 dispatch. Exactly one file with no --json assigns
@@ -6441,7 +6469,7 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
                 fatal("--module-graph requires a Zig source file; ZON has no imports to validate", .{});
             }
         }
-        return AstCheckBatch.run(arena, io, file_paths.items, color, force_zon, module_graph_path, want_json);
+        return AstCheckBatch.run(arena, io, file_paths.items, color, force_zon, module_graph_path, as_module_spec, want_json);
     }
 
     // --module-graph resolves relative file imports against the checked file's directory,
@@ -6509,7 +6537,7 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
             // to upstream ast-check.
             if (module_graph_path) |graph_path| {
                 if (!zir.hasCompileErrors()) {
-                    try AstCheckImports.checkAgainstGraph(arena, io, tree, zig_source_path.?, display_path, graph_path, color);
+                    try AstCheckImports.checkAgainstGraph(arena, io, tree, zig_source_path.?, display_path, graph_path, as_module_spec, color);
                 }
             }
 

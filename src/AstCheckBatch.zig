@@ -22,8 +22,15 @@
 //! in ast-check's own diagnostics today, so their absence is not a loss of information for
 //! this command, only for a hypothetical future one:
 //! `{files:[{path,status,reason?,errors:[{msg,line,column,count,notes}],import_stats?,
-//! graph_check?}],summary:{requested,checked,failed,skipped,graph_not_applicable,
-//! import_stats}}`. `import_stats` (both per-file and the summary's aggregate total) is
+//! graph_check?,check_semantics?,as_module_name?}],summary:{requested,checked,failed,
+//! skipped,graph_not_applicable,import_stats}}`. `check_semantics`/`as_module_name` are
+//! Crown stage 0.5 rung 4 (`docs/crown/PLAN.md`, "Stage 0.5" item 4): present under the
+//! same condition as `import_stats` (`--module-graph` requested, `.zig` file), naming
+//! whether this file's named imports were validated under rung 1's graph-wide "union"
+//! (default) or rung 4's per-module "strict" semantics (once `--as-module` is bound --
+//! see `main.zig`'s `usage_ast_check`: one `--as-module` binds every `.zig` member of a
+//! batch, there is no per-file binding). `import_stats` (both per-file and the summary's
+//! aggregate total) is
 //! rung 1's honest-denominator `AstCheckImports.Stats`, carried into `--json` rather than
 //! discarded (rung-3 review item 2: PLAN.md's own charter for this rung is "diagnostics
 //! available as machine-readable JSON... without scraping"). `graph_check`, present only
@@ -102,6 +109,14 @@ const JsonFile = struct {
     errors: []const JsonError = &.{},
     import_stats: ?AstCheckImports.Stats = null,
     graph_check: ?[]const u8 = null,
+    /// Rung 4: "union" or "strict" -- see this file's top comment. Non-null under exactly
+    /// the same condition as `import_stats` above (`--module-graph` requested, `.zig`
+    /// file); null on any row where no import check ran at all, so its presence is never
+    /// ambiguous with "checked, and it happened to be rung 1's default."
+    check_semantics: ?[]const u8 = null,
+    /// The bound module's `fully_qualified_name` -- set only when `check_semantics ==
+    /// "strict"`, i.e. only once `--as-module` resolved successfully.
+    as_module_name: ?[]const u8 = null,
 };
 
 /// Defaulted throughout (rung-3 review item 7): the four counters have the obvious correct
@@ -154,6 +169,7 @@ pub fn run(
     color: Color,
     force_zon: bool,
     module_graph_path: ?[]const u8,
+    as_module_spec: ?[]const u8,
     want_json: bool,
 ) !void {
     // Loaded once and shared by every file below: the graph document is invariant across
@@ -170,6 +186,25 @@ pub fn run(
                 // code `fatal` would have printed directly before this rung-3 fix moved
                 // graph-loading's failure path out of `AstCheckImports.loadGraph` and into
                 // data (see that file's `loadAllowedNamesOrErr`).
+                if (want_json) {
+                    emitJsonError(arena, io, msg);
+                    process.exit(1);
+                }
+                process.fatal("{s}", .{msg});
+            },
+        }
+    } else null;
+
+    // Crown stage 0.5 rung 4 (docs/crown/PLAN.md): resolved once and reused for every
+    // `.zig` member of the batch -- "one --as-module binds ALL .zig members," per this
+    // file's top comment; there is no per-file binding. `cmdAstCheck` (`main.zig`) refuses
+    // `--as-module` without `--module-graph` before ever dispatching here, so
+    // `loaded_graph.?` below is guaranteed non-null whenever `as_module_spec` is non-null.
+    const binding: ?AstCheckImports.ModuleBinding = if (as_module_spec) |spec| bnd: {
+        switch (try AstCheckImports.resolveAsModule(arena, io, loaded_graph.?, spec)) {
+            .ok => |b| break :bnd b,
+            .err => |msg| {
+                // Same doctrine-4 reasoning as the graph-load failure above.
                 if (want_json) {
                     emitJsonError(arena, io, msg);
                     process.exit(1);
@@ -208,7 +243,7 @@ pub fn run(
         _ = child_arena_state.reset(.retain_capacity);
         const child_arena = child_arena_state.allocator();
 
-        const outcome = try checkOneFile(arena, child_arena, io, path, color, force_zon, loaded_graph, want_json, &read_buffer);
+        const outcome = try checkOneFile(arena, child_arena, io, path, color, force_zon, loaded_graph, binding, want_json, &read_buffer);
         outcomes[i] = outcome;
         switch (outcome.status) {
             .ok => checked += 1,
@@ -263,6 +298,7 @@ fn checkOneFile(
     color: Color,
     force_zon: bool,
     loaded_graph: ?AstCheckImports.LoadedGraph,
+    binding: ?AstCheckImports.ModuleBinding,
     want_json: bool,
     read_buffer: []u8,
 ) !CheckOutcome {
@@ -288,7 +324,7 @@ fn checkOneFile(
     const tree = try Ast.parse(child_arena, source, mode);
 
     return switch (mode) {
-        .zig => checkZigFile(arena, child_arena, io, tree, source, path, color, loaded_graph, want_json),
+        .zig => checkZigFile(arena, child_arena, io, tree, source, path, color, loaded_graph, binding, want_json),
         .zon => checkZonFile(arena, child_arena, io, tree, source, path, color, want_json, loaded_graph != null),
     };
 }
@@ -319,6 +355,7 @@ fn checkZigFile(
     path: []const u8,
     color: Color,
     loaded_graph: ?AstCheckImports.LoadedGraph,
+    binding: ?AstCheckImports.ModuleBinding,
     want_json: bool,
 ) !CheckOutcome {
     const zir = try AstGen.generate(child_arena, tree);
@@ -348,11 +385,17 @@ fn checkZigFile(
         // `zig_source_path` and `display_path` are the same value here, exactly as they are
         // at the single-file call site once `zig_source_path.?` is known non-null (see
         // `cmdAstCheck`): every batch entry is a real path, never stdin.
-        const result = try AstCheckImports.collectGraphViolations(child_arena, io, tree, path, path, loaded, &wip_errors);
+        const result = try AstCheckImports.collectGraphViolations(child_arena, io, tree, path, path, loaded, binding, &wip_errors);
         // `Stats` is plain numbers (no slices), so it survives `child_arena`'s reset by
         // value with no dup needed -- unlike the `ErrorBundle`-derived strings below
         // (rung-3 review item 2, item 7).
         const import_stats = result.stats;
+        // Rung 4: "strict" once --as-module bound this run, else rung 1's original
+        // "union" -- see `JsonFile.check_semantics`'s doc comment. `binding.
+        // fully_qualified_name` is a `loaded_graph`-arena string (survives `child_arena`'s
+        // reset like `import_stats` above), so no dup is needed here either.
+        const check_semantics: ?[]const u8 = if (binding != null) "strict" else "union";
+        const as_module_name: ?[]const u8 = if (binding) |b| b.fully_qualified_name else null;
 
         if (result.had_error) {
             const bundle = try wip_errors.toOwnedBundle("");
@@ -370,12 +413,20 @@ fn checkZigFile(
                     .status = "failed",
                     .errors = try extractErrors(arena, bundle),
                     .import_stats = import_stats,
+                    .check_semantics = check_semantics,
+                    .as_module_name = as_module_name,
                 },
             };
         }
 
         if (!want_json) try AstCheckImports.printSummary(io, result.stats, path);
-        return .{ .status = .ok, .json = .{ .path = path, .status = "ok", .import_stats = import_stats } };
+        return .{ .status = .ok, .json = .{
+            .path = path,
+            .status = "ok",
+            .import_stats = import_stats,
+            .check_semantics = check_semantics,
+            .as_module_name = as_module_name,
+        } };
     }
 
     return .{ .status = .ok, .json = .{ .path = path, .status = "ok" } };
