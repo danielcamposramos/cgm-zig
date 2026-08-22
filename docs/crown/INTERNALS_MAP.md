@@ -6,6 +6,7 @@
 > **Purpose:** anchor document for the module-artifact cache work. Stages referenced throughout:
 > **stage 0** = emit the resolved module graph as JSON; **stage 2a** = attribute analysis work to its owning module; **stage 2b** = DWARF dedup-by-reference across compile units; **stage 2c** = per-module content-addressed artifact cache.
 > Every `file:line` below was produced by a reader against this tree and spot-checked during synthesis. Where two readers disagreed, the disagreement is called out explicitly rather than averaged away (see §3.4 and §4.3).
+> **Anchor pin:** all line citations are valid as of commit `16f5299f` (the tree the readers walked). Later patches shift anchors below their insertion points — first instance: patch/003's comment inserts move `Zcu.zig` anchors above line 150 by +4 and `Zcu/PerThread.zig` anchors above 2701 by +9 (~30 rows affected; the pre-merge review enumerated them). Resolve a stale anchor by reading the cited identifier at `16f5299f`, or re-anchor rows as they are consumed.
 
 ---
 
