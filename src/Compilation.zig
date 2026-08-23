@@ -3343,7 +3343,7 @@ pub fn appendFileSystemInput(comp: *Compilation, path: Compilation.Path) Allocat
     fsi.appendSliceAssumeCapacity(path.sub_path);
 }
 
-fn resolveEmitPath(comp: *Compilation, path: []const u8) Cache.Path {
+pub fn resolveEmitPath(comp: *Compilation, path: []const u8) Cache.Path {
     return .{
         .root_dir = switch (comp.cache_use) {
             .none => .cwd(),
