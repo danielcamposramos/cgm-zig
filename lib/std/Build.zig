@@ -131,6 +131,18 @@ pub const Graph = struct {
     /// Steps should use `io` to limit the number of jobs, however in the case of
     /// a single step spawning a fixed number of processes this can be used.
     max_jobs: ?u32 = null,
+    /// Worker count to pass to child compiler invocations as `-j<N>`, or `null` to pass
+    /// nothing and let each child derive its own from the host.
+    ///
+    /// `max_jobs` above bounds concurrent STEPS; it has exactly one consumer in the
+    /// entire tree (`Build/Step/Run.zig`, choosing fuzzer instance count) and never
+    /// reached a compiler. So `zig build -j4` bounded steps to four while each spawned
+    /// compiler independently derived its worker count from the host, authorising up to
+    /// four times the machine's logical CPU count in compiler worker threads. This field
+    /// is how the build runner shares the machine out instead.
+    ///
+    /// `null` is the stock behaviour: no `-j` is passed and nothing changes.
+    child_jobs: ?u32 = null,
     time_report: bool,
     /// Similar to the `Io.Terminal.Mode` returned by `Io.lockStderr`, but also
     /// respects the '--color' flag.

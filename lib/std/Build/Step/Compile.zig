@@ -1692,6 +1692,13 @@ fn getZigArgs(compile: *Compile, fuzz: bool) ![][]const u8 {
 
     try addFlag(&zig_args, "incremental", b.graph.incremental);
 
+    // Share the machine out rather than letting every concurrent child compiler derive
+    // the whole of it. `null` -- the stock value -- passes nothing, exactly as before.
+    // See `std.Build.Graph.child_jobs`.
+    if (b.graph.child_jobs) |n| {
+        try zig_args.append(b.fmt("-j{d}", .{n}));
+    }
+
     try zig_args.append("--listen=-");
 
     // Windows has an argument length limit of 32,766 characters, macOS 262,144 and Linux

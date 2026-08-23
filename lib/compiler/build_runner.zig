@@ -30,6 +30,17 @@ pub fn main(init: process.Init.Minimal) !void {
     defer _ = debug_gpa_state.deinit();
     const gpa = debug_gpa_state.allocator();
 
+    // NOT setting `concurrent_limit` here is deliberate, and it corrects an incoming
+    // premise. The survey lane reported this omission as upstream issue #25748 (`io.concurrent`
+    // grows the pool past `cpu_count`) live in our base, fixable in one line. The
+    // omission is real -- `InitOptions.concurrent_limit` defaults to `.unlimited` and
+    // `-j<N>` bounds `async_limit` only -- but the one-line fix is wrong here: the build
+    // runner's `io.concurrent` users are the web UI's per-connection tasks
+    // (`lib/std/Build/WebServer.zig:180`, `:311`, `:600`) and the fuzzer's coverage run
+    // (`lib/std/Build/Fuzz.zig:135`). Capping that count caps concurrent web-UI clients,
+    // and no measurement exists to choose a cap that is generous enough for a server and
+    // tight enough to matter. Named as a residual rather than closed with a guessed
+    // number.
     var threaded: std.Io.Threaded = .init(gpa, .{
         .environ = init.environ,
         .argv0 = .init(init.args),
@@ -119,6 +130,8 @@ pub fn main(init: process.Init.Minimal) !void {
     // ORDER 2 at the step level. The derived default is `layered`; `random` (today's
     // behaviour) and `declared` stay reachable by name. See `StepOrder`.
     var step_order: StepOrder = .layered;
+    // How many workers each child compiler is told to use. See `ChildJobs`.
+    var child_jobs: ChildJobs = .share;
     var max_rss: u64 = 0;
     var skip_oom_steps = false;
     var test_timeout_ns: ?u64 = null;
@@ -270,6 +283,17 @@ pub fn main(init: process.Init.Minimal) !void {
                         arg, next_arg,
                     });
                 };
+            } else if (mem.cutPrefix(u8, arg, "--child-jobs=")) |text| {
+                if (mem.eql(u8, text, "share")) {
+                    child_jobs = .share;
+                } else if (mem.eql(u8, text, "keep")) {
+                    child_jobs = .keep;
+                } else {
+                    const n = std.fmt.parseUnsigned(u32, text, 10) catch
+                        fatalWithHint("expected [share|keep|<N>] after '--child-jobs=', found '{s}'", .{text});
+                    if (n < 1) fatal("number of child jobs must be at least 1", .{});
+                    child_jobs = .{ .fixed = n };
+                }
             } else if (mem.cutPrefix(u8, arg, "--step-order=")) |text| {
                 step_order = std.meta.stringToEnum(StepOrder, text) orelse
                     fatalWithHint("expected [layered|random|declared] after '--step-order=', found '{s}'", .{text});
@@ -537,6 +561,8 @@ pub fn main(init: process.Init.Minimal) !void {
         run.available_rss = process.totalSystemMemory() catch std.math.maxInt(u64);
         run.max_rss_is_default = true;
     }
+
+    graph.child_jobs = resolveChildJobs(child_jobs, graph.max_jobs);
 
     prepare(arena, builder, targets.items, &run, graph.random_seed, step_order) catch |err| switch (err) {
         error.DependencyLoopDetected, error.InsufficientMemory => {
@@ -1290,6 +1316,93 @@ fn printTreeStep(
     }
 }
 
+/// How many workers each spawned compiler is told to use.
+///
+/// THE PROBLEM, measured by reading three greps. `-j<N>` at the build-runner level does
+/// two things: it bounds concurrent STEPS via `setAsyncLimit`, and it sets
+/// `graph.max_jobs`. `grep -rn 'max_jobs' lib/ src/` returns three hits total --
+/// declaration, that assignment, and ONE consumer: `lib/std/Build/Step/Run.zig`, choosing
+/// how many fuzzer instances to run. `grep -n 'jobs' lib/std/Build/Step/Compile.zig`
+/// returns ZERO. So no compile step ever passed `-j` to the compiler it spawned, and each
+/// spawned `zig build-exe` reached `src/main.zig`'s derivation and independently took the
+/// whole host. On a 6c/12t machine, `zig build -j4` therefore authorises up to 4 x 12 = 48
+/// compiler worker threads over 12 logical CPUs.
+///
+/// THE POLICY, and why it is derived rather than picked. The bound to respect is the one
+/// the operator stated: `-jN` must not authorise N x cores. Dividing the host's logical
+/// CPUs by the step width the operator authorised is the only reading of that sentence
+/// that produces a number, and it is exact -- `N` steps x `logical / N` workers is
+/// `logical`.
+const ChildJobs = union(enum) {
+    /// Divide the host among the authorised concurrent steps. THE DERIVED DEFAULT.
+    ///
+    /// It applies only when `-j` was actually given, and that restraint is deliberate.
+    /// Without `-j`, the step width is not an operator's request -- it is itself derived
+    /// from the host by `Io.Threaded.init` -- so dividing by it would double-count the
+    /// same machine and, on a project whose build is one large compile step, would hand
+    /// that step a fraction of the host it should own outright. Nothing to share means
+    /// nothing is shared, and the printed line says which case applied.
+    share,
+    /// Pass nothing; every child derives the whole host, exactly as before this fork.
+    /// Kept reachable by name so a regression can be bisected against it.
+    keep,
+    /// Pass `-j<N>` verbatim.
+    fixed: u32,
+};
+
+/// Resolves `ChildJobs` against the host and the authorised step width, and reports the
+/// result in one line. Returns the value for `std.Build.Graph.child_jobs`: `null` means
+/// pass no `-j` at all.
+fn resolveChildJobs(child_jobs: ChildJobs, max_jobs: ?u32) ?u32 {
+    switch (child_jobs) {
+        .keep => {
+            std.log.info(
+                "child compilers: no -j passed (given: keep); each derives the whole host",
+                .{},
+            );
+            return null;
+        },
+        .fixed => |n| {
+            std.log.info("child compilers: -j{d} (given)", .{n});
+            return n;
+        },
+        .share => {},
+    }
+
+    // Same probe the compiler itself uses, so the two lines cannot disagree about the
+    // host. `physical` is reported when it could be measured and UNKNOWN when it could
+    // not; the division uses `logical`, because what is being shared out is threads.
+    const topology: std.Thread.Topology = std.Thread.Topology.detect(.{}) catch .{
+        .logical = 1,
+        .physical = null,
+        .threads_per_core = null,
+        .source = .unknown,
+    };
+
+    const steps = max_jobs orelse {
+        // NAMED RESIDUAL, and it is the bigger half of the exposure: with no `-j`, the
+        // runner's own step width is `cpu_count - 1` and every child still takes the whole
+        // host, so the product is unbounded by anything either side knows about. Bounding
+        // it needs the number of steps ACTUALLY running at spawn time, which `getZigArgs`
+        // cannot see, or a measured per-step resource ledger, which does not exist. Said
+        // out loud rather than approximated with a number nobody measured.
+        std.log.info(
+            "child compilers: no -j passed (derived: share, but no -j given to share out); " ++
+                "each derives the whole host from {d} logical CPUs",
+            .{topology.logical},
+        );
+        return null;
+    };
+
+    const n: u32 = @intCast(@max(topology.logical / @max(steps, 1), 1));
+    std.log.info(
+        "child compilers: -j{d} (derived: {d} logical CPUs / -j{d} concurrent steps); " ++
+            "--child-jobs=keep restores per-child whole-host derivation",
+        .{ n, topology.logical, steps },
+    );
+    return n;
+}
+
 /// ORDER 2 at the step level: which of the steps that are ready to run goes first.
 ///
 /// The topological constraint is not a choice -- a step cannot start until `pending_deps`
@@ -1859,6 +1972,12 @@ fn printUsage(b: *std.Build, w: *Writer) !void {
         \\  --zig-lib-dir [arg]          Override path to Zig lib directory
         \\  --build-runner [file]        Override path to build runner
         \\  --seed [integer]             For shuffling dependency traversal order (default: random)
+        \\  --child-jobs=[share|keep|N]  Workers each spawned compiler is given.
+        \\                               share (default): with -jN, divide the host's
+        \\                               logical CPUs among the N concurrent steps, so
+        \\                               -jN cannot authorise N x cores threads. keep:
+        \\                               pass nothing and let each child derive the whole
+        \\                               host, as before. N: pass -jN verbatim.
         \\  --step-order=[layered|random|declared]
         \\                               Order among steps whose dependencies are all met.
         \\                               layered (default): dependency depth ascending,
