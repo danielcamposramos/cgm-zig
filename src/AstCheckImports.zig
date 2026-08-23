@@ -529,6 +529,44 @@ pub fn collectGraphViolations(
     var stats: Stats = .{};
     var had_error = false;
 
+    // Review finding V6 (scope premise unenforced). This rung's whole claim is "this file,
+    // AS module X" -- and the head commit never checked the first half. A file outside X's
+    // root passed clean while its ordinary, entirely legal local imports were accused of
+    // escaping X's sandbox: the accusation was backwards, and the operator had no way to see
+    // that the premise, not the code, was what failed. `Package/Module.zig:3` is explicit
+    // that a module's files live under its root, so membership is checkable here.
+    //
+    // Reported as a per-file bundle error rather than a `fatal`: in batch mode one
+    // mis-bound member must not kill the other N-1 files (rung 3's whole contract is that
+    // the denominator never silently shrinks). It has no source span -- it is a fact about
+    // the file, not about a line in it -- so it goes in with `src_loc = .none`.
+    if (binding) |b| {
+        const file_abs = if (std.fs.path.isAbsolute(zig_source_path))
+            try std.fs.path.resolve(arena, &.{zig_source_path})
+        else if (b.cwd_abs) |c|
+            try std.fs.path.resolve(arena, &.{ c, zig_source_path })
+        else
+            null;
+        const membership: WithinRoot = if (file_abs) |fa| pathIsWithinRoot(fa, b.root_abs) else .undecidable;
+        switch (membership) {
+            .inside => {},
+            .outside => {
+                had_error = true;
+                try wip_errors.addRootErrorMessage(.{ .msg = try wip_errors.printString(
+                    "--as-module premise fails: '{s}' resolves to '{s}', which is not inside module '{s}''s root '{s}', so this file is not a member of that module and \"this file, as module '{s}'\" is not a claim that can hold. Every import check below is being applied under a binding this file does not satisfy",
+                    .{ display_path, fa_or(file_abs, zig_source_path), b.fully_qualified_name, b.root_abs, b.fully_qualified_name },
+                ) });
+            },
+            .undecidable => {
+                had_error = true;
+                try wip_errors.addRootErrorMessage(.{ .msg = try wip_errors.printString(
+                    "--as-module premise could not be checked: '{s}' could not be resolved to an absolute path to test membership in module '{s}''s root '{s}'. Refusing to check imports under a binding whose premise is unverified",
+                    .{ display_path, b.fully_qualified_name, b.root_abs },
+                ) });
+            },
+        }
+    }
+
     const node_count: u32 = @intCast(tree.nodes.len);
     var node_idx: u32 = 0;
     while (node_idx < node_count) : (node_idx += 1) {
