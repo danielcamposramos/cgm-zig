@@ -518,9 +518,15 @@ def workload(ctx, name=None):
     if name == "selfhost":
         if "error" in fx:
             return None
+        frozen = str(fx.get("frozen_at", "UNKNOWN"))
+        # Truncate a git sha; never truncate prose into a fragment.
+        if len(frozen) == 40 and all(c in "0123456789abcdef" for c in frozen):
+            frozen = frozen[:12]
         return (fx["dir"], list(fx["args"]),
                 f"self-hosted front-end pass over a FROZEN snapshot of this repo's own "
-                f"src/ + lib/ at {fx.get('frozen_at', 'UNKNOWN')[:12]} (~780 modules)")
+                f"src/ + lib/ at {frozen}; approx. 780 modules — a figure inherited from the "
+                f"2026-08-23 run, not re-measured here; the exact count is `n_reachable_files` "
+                f"and appears only when a machine-readable time report is obtainable")
     if name == "stdpull":
         return (fx["dir"], ["-fno-emit-bin", "-Mroot=stdpull.zig"],
                 "refAllDecls over 15 std namespaces (a std-pulling front-end pass)")

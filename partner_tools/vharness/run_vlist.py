@@ -147,18 +147,23 @@ def main():
                    env_zig=env_zig, env_ref=env_ref)
 
     selected = list(vlib.ROW_ORDER)
+    explicit = set()
     if a.group:
-        want = set(a.group.split(","))
-        selected = [r for r in selected if vlib.ROWS[r].group in want]
+        groups = set(a.group.split(","))
+        selected = [r for r in selected if vlib.ROWS[r].group in groups]
     if a.only:
-        want = [x.strip() for x in a.only.split(",") if x.strip()]
-        unknown_ids = [x for x in want if x not in vlib.ROWS]
+        explicit = {x.strip() for x in a.only.split(",") if x.strip()}
+        unknown_ids = sorted(x for x in explicit if x not in vlib.ROWS)
         if unknown_ids:
             print(f"REFUSE: unknown row id(s) {unknown_ids}; run --list", file=sys.stderr)
             return 2
-        selected = [r for r in vlib.ROW_ORDER if r in want]
+        selected = [r for r in vlib.ROW_ORDER if r in explicit]
+    # A slow row is skipped unless --slow, EXCEPT when it was named by id: asking
+    # for H3 by name and being silently given nothing is the kind of quiet skip
+    # this harness exists to abolish. Named-but-not-slow still runs the row, which
+    # then prints its own UNKNOWN-with-the-exact-invocation line.
     if not a.slow:
-        selected = [r for r in selected if not vlib.ROWS[r].slow or r in (a.only or "")]
+        selected = [r for r in selected if not vlib.ROWS[r].slow or r in explicit]
 
     courtesy = vlib.machine_courtesy()
     header = {
