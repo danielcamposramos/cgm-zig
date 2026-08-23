@@ -288,17 +288,29 @@ fn finish(
     };
 }
 
-/// Emits the plan as one line, at derivation time, gated on nothing.
+/// Emits the plan as one line, at derivation time.
 ///
-/// Unconditional by ruling, not by oversight: `docs/crown/DOCTRINE.md` principle 4 (a
-/// tool states its resolved reality) and `PATCH005_DOSSIER.md` §3.7. Every number names
-/// *what* it is and *from what* it came, so the line is checkable against the host's own
-/// instruments (`lscpu -e`) and against §3.6's ceiling table without running anything
-/// else.
+/// By ruling, not by oversight: `docs/crown/DOCTRINE.md` principle 4 (a tool states its
+/// resolved reality) and `PATCH005_DOSSIER.md` §3.7. Every number names *what* it is and
+/// *from what* it came, so the line is checkable against the host's own instruments
+/// (`lscpu -e`) and against §3.6's ceiling table without running anything else.
+///
+/// **THE ONE GATE, and it is the caller's to apply, not this function's.** This writes
+/// prose to stderr. Under `--listen`, stderr is not a terminal -- it is one side of the
+/// build runner's IPC, and the runner reads non-error-bundle bytes there as evidence that
+/// the step failed. V-BR measured the consequence: a green build (exit 0, "13/13 steps
+/// succeeded") printing 6 `^error:` lines and 6 `compile exe <name> Debug native failure`
+/// markers, from this line alone. So `src/main.zig`'s `buildOutputType` calls this only
+/// when `listen == .none`, exactly as it already does for `--time-report`.
+///
+/// The three derivation sites divide cleanly: `buildOutputType` can be a child of the
+/// build runner and is gated; `zig build` and `jitCmd` are the process the operator
+/// invoked, own the terminal, and report unconditionally.
 ///
 /// **Named residual:** this is one line of stderr that stock 0.16.0 does not emit, so a
-/// stock invocation is byte-identical in its *artifact* and not in its *stderr*. That
-/// distinction is exactly what queued item V11 checks, and it is stated there too.
+/// stock *interactive* invocation is byte-identical in its *artifact* and not in its
+/// *stderr*. Under `--listen` -- the machine-readable path -- both are now identical.
+/// That distinction is exactly what queued item V11 checks, and it is stated there too.
 ///
 /// Emitted once per process, at the derivation site, rather than at `Compilation.create`
 /// as the dossier's §3.7 sketch proposed: sub-compilations inherit the plan rather than

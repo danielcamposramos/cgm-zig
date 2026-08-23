@@ -3520,9 +3520,26 @@ fn buildOutputType(
 
     // How much of the host this process will use, derived from a topology probe and
     // reported in one line. See `src/ThreadPlan.zig` for what each number means and
-    // `docs/crown/PATCH005_DOSSIER.md` §3 for why the report is unconditional.
+    // `docs/crown/PATCH005_DOSSIER.md` §3 for why the report exists at all.
+    //
+    // GATED ON `listen == .none`, and the gate is not cosmetic. Under `--listen=-` this
+    // process is a child of `zig build`, and the build runner treats any child stderr
+    // that is not an error bundle as step-failure evidence: V-BR measured a GREEN build
+    // (exit 0, "13/13 steps succeeded") printing 6 lines matching `^error:` and marking
+    // 6 compile steps `native failure`, purely because this line went to stderr. The
+    // artifacts were correct; the DIAGNOSTIC CHANNEL was broken, which is worse than it
+    // sounds -- every consuming project's build would report failures on a green build,
+    // and any harness grepping stderr for `error:` would agree with it.
+    //
+    // Doctrine 4 ("a tool states its resolved reality") is not weakened by this: when a
+    // human invokes the compiler directly the line still prints, unchanged. When the
+    // caller is a machine speaking the IPC protocol, stderr is that protocol's channel
+    // and prose does not belong in it. The compiler already draws exactly this line at
+    // `--time-report` (see the `listen == .none` test above); this follows it.
+    //
+    // The parent `zig build` process keeps its own report -- it owns the terminal.
     const thread_plan: ThreadPlan = .derive(n_jobs, intern_partitions);
-    thread_plan.report();
+    if (listen == .none) thread_plan.report();
     const thread_limit = thread_plan.workers;
     try setThreadLimit(arena, thread_plan);
 
