@@ -191,7 +191,7 @@ pub fn checkAgainstGraph(
         try eb.renderToStderr(io, .{}, color);
     }
 
-    try printSummary(io, result.stats, null);
+    try printSummary(io, result.stats, null, binding);
 
     if (result.had_error) process.exit(1);
 }
@@ -668,23 +668,39 @@ fn addImportError(
 /// item 6: bare, this was the one line in batch output with no path attribution at all,
 /// unlike every other batch-mode line). The single-file caller (`checkAgainstGraph` above)
 /// passes `null`, preserving its own byte-identical output exactly.
-pub fn printSummary(io: Io, stats: Stats, path_prefix: ?[]const u8) !void {
-    var buffer: [256]u8 = undefined;
+pub fn printSummary(io: Io, stats: Stats, path_prefix: ?[]const u8, binding: ?ModuleBinding) !void {
+    var buffer: [512]u8 = undefined;
     const locked = try io.lockStderr(&buffer, null);
     defer io.unlockStderr();
     const w = &locked.file_writer.interface;
     if (path_prefix) |p| try w.print("{s}: ", .{p});
     try w.print(
-        "import sites seen {d}: validated {d} (file {d}, named {d}), exempt(std/builtin/root) {d}, skipped-unchecked {d}\n",
+        "import sites seen {d}: validated {d} (file {d}, named {d}), exempt(std/builtin/root) {d}, skipped-unchecked {d}, sandbox-unresolvable {d}",
         .{
-            stats.file_imports + stats.named_imports + stats.exempt + stats.skipped_nonliteral,
+            stats.total(),
             stats.file_imports + stats.named_imports,
             stats.file_imports,
             stats.named_imports,
             stats.exempt,
             stats.skipped_nonliteral,
+            stats.sandbox_unresolvable,
         },
     );
+    // Review finding REJECT 3 (doctrine 4, self-report): without this clause a passing
+    // strict run and a passing union run were byte-identical in human output, so the line
+    // could not testify to which semantics produced it.
+    //
+    // The clause is appended ONLY when a binding exists, and that is a deliberate choice,
+    // not an omission: rung 1's and rung 3's summary format is a contract their own reviews
+    // ratified, and rung 4 is an additive flag that must not move it. `--as-module` absent
+    // therefore prints exactly what it always printed; `--as-module` present says so, names
+    // the module, and names the rule it applied. The `--json` surface, which has no
+    // byte-identity contract to keep, reports `check_semantics` on BOTH paths.
+    if (binding) |b| {
+        try w.print("; semantics strict (as module '{s}', graph index {d}: named imports checked against that module's own deps, file imports sandboxed to its root)\n", .{ b.fully_qualified_name, b.index });
+    } else {
+        try w.writeAll("\n");
+    }
     try w.flush();
 }
 

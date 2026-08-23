@@ -404,7 +404,7 @@ fn checkZigFile(
             // `catch {}` reasoning as the AstGen-error render above (rung-3 review item 8).
             if (!want_json) {
                 bundle.renderToStderr(io, .{}, color) catch {};
-                try AstCheckImports.printSummary(io, result.stats, path);
+                try AstCheckImports.printSummary(io, result.stats, path, binding);
             }
             return .{
                 .status = .failed,
@@ -419,7 +419,7 @@ fn checkZigFile(
             };
         }
 
-        if (!want_json) try AstCheckImports.printSummary(io, result.stats, path);
+        if (!want_json) try AstCheckImports.printSummary(io, result.stats, path, binding);
         return .{ .status = .ok, .json = .{
             .path = path,
             .status = "ok",
