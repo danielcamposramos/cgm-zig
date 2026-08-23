@@ -1,0 +1,22 @@
+# SABOTAGE PATCH -- V-S2a. NEVER commit this applied; it exists to be fired,
+# watched go red, and reverted. Full recipe, expected red text and revert step:
+# partner_tools/vharness/sabotage/README.md
+diff --git a/src/main.zig b/src/main.zig
+index a5a1e70..67b4fe8 100644
+--- a/src/main.zig
++++ b/src/main.zig
+@@ -8103,13 +8103,13 @@ fn setThreadLimit(arena: std.mem.Allocator, plan: ThreadPlan) Allocator.Error!vo
+             // does above it.
+             //
+             // Only when there are at least two async slots to begin with: a reserve that
+             // consumed the ENTIRE async lane would force every task inline, trading real
+             // workers for a guarantee that only matters when workers exist. At `-j1` and
+             // `-j2` the behaviour is therefore exactly what it was.
+-            io_impl_ptr.concurrent_reserve = if (@intFromEnum(limit) >= 2) 1 else 0;
++            io_impl_ptr.concurrent_reserve = 0; // SABOTAGE (V-S2a): reserve forced to 0
+         },
+         .evented => {},
+     }
+     // `plan.partitions` already carries `InternPool.init`'s `@max(_, 2)` floor
+     // (`InternPool.zig:6295`), applied where it can be reported rather than here where
+     // it could not be.

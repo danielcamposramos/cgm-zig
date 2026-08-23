@@ -1,0 +1,21 @@
+# SABOTAGE PATCH -- V14. NEVER commit this applied; it exists to be fired,
+# watched go red, and reverted. Full recipe, expected red text and revert step:
+# partner_tools/vharness/sabotage/README.md
+diff --git a/lib/std/Thread/Topology.zig b/lib/std/Thread/Topology.zig
+index 1da5525..9c89d6c 100644
+--- a/lib/std/Thread/Topology.zig
++++ b/lib/std/Thread/Topology.zig
+@@ -225,13 +225,12 @@ fn sysTopology(affinity: posix.cpu_set_t, options: DetectOptions) ?Grouping {
+             const lo, const hi = parseRange(range) orelse return null;
+             var sib = lo;
+             while (sib <= hi) : (sib += 1) {
+                 if (sib >= max_cpus) break;
+                 // RULE 1: the affinity intersection. Everything else in this file is
+                 // bookkeeping; this line is the finding.
+-                if (!maskIsSet(affinity, sib)) continue;
+                 if (core_of[sib] != core_none) continue;
+                 core_of[sib] = id;
+                 members += 1;
+             }
+         }
+         // Defensive: every kernel lists a CPU among its own siblings, but a topology file

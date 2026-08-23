@@ -1,0 +1,21 @@
+# SABOTAGE PATCH -- V3. NEVER commit this applied; it exists to be fired,
+# watched go red, and reverted. Full recipe, expected red text and revert step:
+# partner_tools/vharness/sabotage/README.md
+diff --git a/src/Compilation.zig b/src/Compilation.zig
+index d1decdf..1aae1e0 100644
+--- a/src/Compilation.zig
++++ b/src/Compilation.zig
+@@ -7542,12 +7542,13 @@ fn buildOutputFromZig(
+         .incremental, .none => null,
+     };
+ 
+     var sub_create_diag: CreateDiagnostic = undefined;
+     const sub_compilation = Compilation.create(gpa, arena, io, &sub_create_diag, .{
+         .thread_limit = comp.thread_limit,
++        .intern_partitions = 2, // SABOTAGE (V3): overrides the process-global count
+         .dirs = comp.dirs.withoutLocalCache(),
+         .cache_mode = .whole,
+         .parent_whole_cache = parent_whole_cache,
+         .self_exe_path = comp.self_exe_path,
+         .config = config,
+         .root_mod = root_mod,
