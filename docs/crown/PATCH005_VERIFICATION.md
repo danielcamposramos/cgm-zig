@@ -437,6 +437,70 @@ whatever an in-flight counter says), so this row measures parking cost and nothi
 
 ---
 
+**V16 — THE HANG CLASS. A starved tid pool must COMPLETE or REFUSE BY NAME, never hang.**
+*(Added 2026-08-23 after the harness measured the hang. This is a REGRESSION PIN for a
+whole failure class, not a check on one flag.)*
+
+**What it pins, and why it is a class.** patch/001 exists to abolish silent failures in
+the InternPool; patch/002 Finding 3 refused a one-line change specifically because it
+re-introduced one ("*a silent hang, zero bytes on stderr: the exact failure class
+patch/001 exists to abolish*"). patch/005's `(K, M_wide)` decoupling **re-introduced it
+by a different route**: `K` and the worker count are now independent, so a configuration
+can exist with workers but no lane for them to allocate in.
+
+The mechanism, traced rather than inferred:
+`Zcu.PerThread.Id.allocate(n)` seeds the assignable-tid pool with **`n − 1`** entries
+(`src/Zcu/PerThread.zig:99-112`). The linker acquires one tid through `io.concurrent` and
+**holds it for the entire compilation** (dossier §1.1 row A7). So the lanes actually
+available to allocating workers are **`K − 2`** — which is exactly the `alloc lanes`
+number the report line already prints. At `K = 2` it is **zero**, and every worker that
+asks for a tid blocks forever in `tid_cond.waitUncancelable`
+(`src/Zcu/PerThread.zig:116-136`). No error, no timeout, no output.
+
+**`K = 2` IS REACHABLE WITHOUT ANY FLAG**, which is what makes this a release blocker
+rather than a footgun:
+
+| How | Derivation | Result |
+|---|---|---|
+| `--intern-partitions=2 -j4` | given | `alloc lanes 0` → **hang** (measured) |
+| **1-physical-core host**, `-j4` | `basis = max(1, 2) = 2` → K = 2 | `alloc lanes 0` → **hang** |
+| **2-physical-core host**, default `-j` | `basis = max(2, 2) = 2` → K = 2 | `alloc lanes 0` → **hang** |
+| `taskset -c <2 cpus>` on any host | affinity intersection → physical 1–2 | **hang** |
+
+Stock 0.16.0 does **not** do this: one integer set both quantities, so `-j4` implied a
+4-way pool. **The decoupling introduced it**, and dual-core CI containers are exactly
+where it would land.
+
+```
+# every row must terminate. none may hang.
+timeout 120 $SAFE build-obj -j4 --intern-partitions=2 -Mroot=<hello>;  echo "rc=$?"
+timeout 120 taskset -c <2 physical cpus> $SAFE build-obj -Mroot=<hello>; echo "rc=$?"
+timeout 120 taskset -c <1 cpu>           $SAFE build-obj -Mroot=<hello>; echo "rc=$?"
+timeout 120 $SAFE build-obj -j1 --intern-partitions=2 -Mroot=<hello>;  echo "rc=$?"
+```
+
+*Expect, and BOTH outcomes are green — the row forbids one specific thing:*
+- **rc = 0** (the configuration was derived into something workable and says so), **or**
+- **a named refusal** naming the partition count, the lane count, and the remedy.
+- **`rc = 124` (the `timeout` firing) is RED for every row above.** A silent hang is the
+  one outcome this row exists to make impossible.
+
+The `-j1` row must stay **rc = 0**: the full serial member is legitimate, `alloc lanes 0`
+is harmless when nothing runs concurrently, and a refusal there would break a working
+configuration. **A guard that refuses `-j1` has over-fired and is itself a defect.**
+
+**Negative control (fired, not assumed):** the pre-fix binary must produce `rc=124` on
+row 1. A guard whose red has never been seen is a guard nobody has met — and here the
+red is measurable without a sabotage rebuild, because the defect shipped.
+
+**Why `alloc lanes` had to become load-bearing.** Before this row, `alloc_lanes` appeared
+**only** in `src/ThreadPlan.zig` — computed, printed, and enforced nowhere. The compiler
+printed `alloc lanes 0` and then hung, having stated the exact cause of its own hang and
+done nothing about it. **A number a tool reports but never acts on is decoration**, and
+this row exists to keep it acting.
+
+---
+
 ## 005c — edges-first
 
 **V8 — the selection overhead, measured before the default could ever flip (R6).**
