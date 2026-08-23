@@ -580,15 +580,57 @@ this line reports what chose the partition count, and from which probe.
 | `-j<N>` | worker count **M_wide** | existing (`main.zig:1171-1180`); meaning narrows from "both" to "workers", which is what its help text at `:455` already says: *"Limit concurrent jobs"* |
 | `--intern-partitions=<N>` | partition count **K**; also fixes `M_alloc = N − 2` | new; the knob that never existed |
 | `--intern-partitions=logical` | opt back in to today's coupling (K derived from logical CPUs) | new; keeps the pre-amendment behaviour reachable by name |
-| `-j1` | full serial member: M_wide = 1, K = 2 (floor), async limit `.nothing` → every `group.async` runs inline (`Threaded.zig:2100-2105`) | preserved verbatim |
+| `-j1` | full serial member: M_wide = 1, **K unchanged by `-j`** (K = 8 on this host), async limit `.nothing` → every `group.async` runs inline (`Threaded.zig:2100-2105`) | preserved verbatim |
 
 `--intern-partitions=logical` earns its place for the same reason
 `--step-order=random` does: it keeps the old behaviour reachable by name, so a
 regression can be bisected against it without building a second compiler.
 
-`-j1` keeping K = 2 is not a compromise, it is the patch/002 ruling honoured:
-`@max(available_threads, 2)` at `InternPool.zig:6295` stays exactly as upstream
-wrote it.
+#### Correction — this table said `-j1` gives K = 2. The code says otherwise, and the code is right.
+
+The row above originally read *"`-j1` | full serial member: M_wide = 1, **K = 2
+(floor)**"*. **V2 measured it false.**
+
+```
+$SAFE build-exe -j1 -Mroot=hello.zig
+  expected by this table:  workers 1; intern partitions 2;   536,870,911 items
+  MEASURED:                workers 1 (given); intern partitions 8
+                           (derived: physical, rounded up to a power of two);
+                           134,217,727 items per partition
+```
+
+`ThreadPlan.derive` (`src/ThreadPlan.zig:227`) computes the two numbers from two
+independent inputs and they never meet: `workers` comes from `n_jobs` at `:237`,
+`partitions` from `partitions_arg orelse topology` at `:241-255`. **`n_jobs`
+never touches `partitions`.** The `@max(…, 2)` floor exists — in `finish` at
+`:270-272`, mirroring `InternPool.zig:6295` — but it is a floor, and 8 is above
+it, so it never engages. K = 2 would require `--intern-partitions=2`, typed
+explicitly.
+
+**This is the decoupling working exactly as §2 designed it**, so the defect was
+in the prose, not the design: the table was written before the split and carried
+forward the pre-split world in which one integer meant both things. That is the
+whole error, and it is worth naming because the same sentence appeared in the
+verification list, which means a row was queued against a claim no code made.
+
+**Effect on behaviour: none, and better than the table promised.** K = 8 gives
+134,217,727 items per partition where K = 2 would give 536,870,911 — less
+headroom, but four times what the production incident needed, and `tid_width = 3`
+so none of patch/002 Finding 3's three `-j1` edges (all of which fire at
+`tid_width == 0`) come near. **R8 does not fire.** V2's behavioural half is
+GREEN: `-j1` exits 0, does not hang, and the binary runs.
+
+**Residual, stated rather than resolved:** whether `-j1` *should* narrow K is a
+real question this correction does not answer. It would buy 4x headroom on a
+genuinely serial build, and it would cost a second coupling between two numbers
+this patch just spent its whole design decoupling. Unmeasured either way; not
+changed here; named so the next lane can decide it deliberately instead of
+inheriting it from a stale table.
+
+The patch/002 ruling itself is untouched and still honoured: `@max(available_threads, 2)`
+at `InternPool.zig:6295` stays exactly as upstream wrote it, and `ThreadPlan.finish`
+mirrors rather than assumes it — which is precisely why the measured line could be
+compared against the table at all.
 
 ---
 
