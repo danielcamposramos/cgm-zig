@@ -460,16 +460,39 @@ asks for a tid blocks forever in `tid_cond.waitUncancelable`
 **`K = 2` IS REACHABLE WITHOUT ANY FLAG**, which is what makes this a release blocker
 rather than a footgun:
 
-| How | Derivation | Result |
-|---|---|---|
-| `--intern-partitions=2 -j4` | given | `alloc lanes 0` → **hang** (measured) |
-| **1-physical-core host**, `-j4` | `basis = max(1, 2) = 2` → K = 2 | `alloc lanes 0` → **hang** |
-| **2-physical-core host**, default `-j` | `basis = max(2, 2) = 2` → K = 2 | `alloc lanes 0` → **hang** |
-| `taskset -c <2 cpus>` on any host | affinity intersection → physical 1–2 | **hang** |
+**This table was CORRECTED after measurement.** The first version of this row predicted
+hangs on two configurations that in fact completed. The wrong predictions are kept beside
+the measurements rather than silently edited out — a row that quietly rewrites its own
+prediction is worth nothing as a pin.
 
-Stock 0.16.0 does **not** do this: one integer set both quantities, so `-j4` implied a
-4-way pool. **The decoupling introduced it**, and dual-core CI containers are exactly
-where it would land.
+| Configuration | Derivation | Predicted | **MEASURED** |
+|---|---|---|---|
+| `-j4 --intern-partitions=2` | given K = 2, workers 4 | hang | **rc=124 hang** ✓ |
+| `taskset -c 4,10,5,11` = **2 phys / 4 logical**, **NO FLAGS** | K = 2, workers 4 | hang | **rc=124 hang** ✓ |
+| `taskset -c 4,5` = 2 phys / 2 logical, no flags | K = 2, workers 2 | hang | **rc=0 — PREDICTION WRONG** |
+| `taskset -c 4,10` = 1 phys / 2 logical, no flags | K = 2, workers 2 | hang | **rc=0 — PREDICTION WRONG** |
+| `-j2` / `-j3 --intern-partitions=2` | K = 2 | — | **rc=0** (see below) |
+| `-j1 --intern-partitions=2` | K = 2, workers 1 | rc=0 | **rc=0** ✓ |
+
+**The true condition is `alloc_lanes == 0` AND `workers ≥ 4`**, not `workers > 1`: below
+four workers the async budget keeps allocating work on the main thread, which holds
+`Id.acquire`'s recursive shortcut and never touches the pool.
+
+**`-j2`/`-j3` completing is not a reprieve — it is the same defect in a quieter costume.**
+With zero lanes, no allocating work can *ever* leave the main thread, so those runs
+**silently degrade to serial** while reporting the worker count the operator asked for.
+That is why the shipped guard refuses the *structural* condition
+(`alloc_lanes == 0 and workers > 1`) and not the measured one: refusing only `≥ 4` would
+bless a configuration that cannot deliver what it advertises, and would hard-code today's
+`concurrent_reserve` arithmetic into a liveness invariant.
+
+**The decisive row is the second.** 2 physical / 4 logical is the ordinary shape of a
+2-core CI container, and it hung on `build-obj hello.zig` with **no flags at all**, having
+first printed `intern partitions 2 (derived: physical...); alloc lanes 0`. The control is
+unambiguous: the unpatched reference completed the identical command on the identical mask
+(rc=0), and also completed `-j4` on two physical cores. Stock 0.16.0 cannot reach the
+state, because one integer set both quantities. **The `(K, M_wide)` decoupling introduced
+it.**
 
 ```
 # every row must terminate. none may hang.

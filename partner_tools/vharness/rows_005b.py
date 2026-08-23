@@ -646,15 +646,23 @@ def v16(ctx):
     """
     fx = ctx.fixtures.get("hello")
     if not fx:
-        return unknown("V16", "hello fixture unavailable", "0 of 4 configurations")
+        return unknown("V16", "hello fixture unavailable", "0 of 6 configurations")
 
     # Two sibling-free CPUs = 2 distinct physical cores on this host (siblings are
     # (0,6)(1,7)(2,8)(3,9)(4,10)(5,11)), which is what makes the derived K=2 case
     # reachable without any flag. A sibling PAIR (4,10) is 1 physical core.
+    # `may_refuse=False` means the row demands rc=0: refusing there is an OVER-FIRE.
+    # Masks exploit this host's sibling map (0,6)(1,7)(2,8)(3,9)(4,10)(5,11):
+    #   4,10,5,11 -> 2 physical / 4 logical  == the ordinary 2-core CI container, and the
+    #                only configuration measured to hang with NO FLAGS AT ALL.
+    #   4,5       -> 2 physical / 2 logical
+    #   4,10      -> 1 physical / 2 logical
     cases = [
         ("given-K2-j4", ["-j4", "--intern-partitions=2"], None, True),
-        ("derived-2-physical", [], "4,5", True),
-        ("derived-1-physical", [], "4,10", True),
+        ("derived-2phys-4logical-NOFLAGS", [], "4,10,5,11", False),
+        ("derived-2-physical", [], "4,5", False),
+        ("derived-1-physical", [], "4,10", False),
+        ("given-K2-j2-silently-serial", ["-j2", "--intern-partitions=2"], None, True),
         ("j1-K2-must-work", ["-j1", "--intern-partitions=2"], None, False),
     ]
 
@@ -686,19 +694,23 @@ def v16(ctx):
                     + (f", taskset {mask}" if mask else "") + f"] -> {state}"
                     + ("" if may_refuse else "  (MUST be rc=0)"))
 
-    # The -j1 member is the over-fire check: it may not be refused.
-    overfired = "j1-K2-must-work" not in completions
+    # Every `may_refuse=False` case must COMPLETE. Refusing one of them is an over-fire:
+    # the derived cases are ordinary hosts that must simply work, and `-j1` is the
+    # legitimate serial member. A guard that refuses any of them is itself the defect.
+    must_complete = [t for t, _, _, may in cases if not may]
+    overfired = [t for t in must_complete if t not in completions]
     verdict = RED if (hangs or overfired) else GREEN
     ev = "; ".join(rows)
     if hangs:
         ev += (f". RED: {len(hangs)} of 4 configurations produced a silent hang or an "
                f"unnamed exit -- the exact failure class patch/001 exists to abolish.")
     elif overfired:
-        ev += (". RED: the guard OVER-FIRED. `-j1 --intern-partitions=2` is a legitimate "
-               "serial configuration and refusing it breaks a working setup; a guard that "
-               "refuses -j1 is itself a defect.")
+        ev += (f". RED: the guard OVER-FIRED on {overfired} -- these are ordinary working "
+               f"configurations (plain derived hosts, and the legitimate `-j1` serial "
+               f"member). Refusing them breaks setups that worked; a guard that over-fires "
+               f"is itself the defect.")
     else:
         ev += (f". GREEN: 0 of 4 hung; {len(completions)} completed, {len(refusals)} refused "
                f"by name. Both outcomes are acceptable; only silence is not.")
-    return Verdict("V16", verdict, ev, f"{len(hangs)} hangs of 4 configurations",
+    return Verdict("V16", verdict, ev, f"{len(hangs)} hangs of {len(cases)} configurations",
                    {"hangs": hangs, "refusals": refusals, "completions": completions})
