@@ -2862,8 +2862,12 @@ pub const CompileError = error{
 };
 
 /// `intern_partitions` sizes this `Zcu`'s own `InternPool`: `ip.locals` gets that many
-/// entries, and `tid_width = ceil(log2(max(_, 2)))` splits the 30-bit index space that
+/// entries, and `tid_width = ceil(log2(max(_, 2)))` splits the **31-bit** index space that
 /// many ways (`InternPool.zig:6295-6335`).
+///
+/// (This said 30 until the `CaptureValue` widening freed a bit. It is 31 and not 32
+/// because `Air.Inst.Ref` independently owns the top bit as its interned-vs-instruction
+/// tag — `src/Air.zig:1170-1176`. Keep in step with `ThreadPlan.index_bits`.)
 ///
 /// The guard below is dossier risk R1 made loud. The thread-id pool is process-global
 /// (`PerThread.Id.poolLen`), a tid is a direct index into whichever pool is active

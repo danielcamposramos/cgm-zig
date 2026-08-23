@@ -8123,6 +8123,39 @@ fn setThreadLimit(arena: std.mem.Allocator, plan: ThreadPlan) Allocator.Error!vo
         },
         .evented => {},
     }
+    // ENFORCEMENT, at the site that actually creates the pool.
+    //
+    // `Id.allocate` below seeds the assignable-tid pool with `partitions - 1` ids. The
+    // linker acquires one through `io.concurrent` and holds it for the entire compilation,
+    // so `partitions - 2` -- the `alloc lanes` number the report line already prints -- is
+    // all a worker can ever get. At zero, a worker that asks for a tid waits on `tid_cond`
+    // forever: no error, no timeout, no output. Measured pre-fix on a 2-physical /
+    // 4-logical mask with NO FLAGS AT ALL: rc=124 under `timeout 120`, while the unpatched
+    // reference compiler completed the identical command.
+    //
+    // The check lives HERE and not beside the derivation, deliberately. This is the one
+    // function holding both quantities at once, and it is the caller of `Id.allocate`: a
+    // guard at the derivation site would be one number checking another, while this one
+    // stands between the plan and the pool it is about to build. All three derivation
+    // sites funnel through here, so no site can forget it.
+    //
+    // Until now `alloc_lanes` was computed, printed, and consulted by nothing -- the
+    // compiler announced `alloc lanes 0` and then hung, having named the exact cause of
+    // its own hang. This is where that number stops being decoration.
+    //
+    // The derived path can no longer reach this (`ThreadPlan.min_derived_basis` floors the
+    // basis at 4), so what remains is an operator who typed `--intern-partitions`. Their
+    // number is never silently overridden; it is refused, by name, with the remedy.
+    if (plan.starvedLanes()) {
+        fatal("--intern-partitions={d} leaves 0 allocating lanes for {d} workers; this " ++
+            "compilation would hang rather than finish. The thread-id pool holds {d} " ++
+            "assignable id(s) and the linker holds one for the whole compilation, so " ++
+            "allocating workers get {d}. Remedy: raise --intern-partitions to 4 or more, " ++
+            "or pass -j1 to run the fully serial member, which needs no lane.", .{
+            plan.partitions, plan.workers, plan.partitions - 1, plan.alloc_lanes,
+        });
+    }
+
     // `plan.partitions` already carries `InternPool.init`'s `@max(_, 2)` floor
     // (`InternPool.zig:6295`), applied where it can be reported rather than here where
     // it could not be.

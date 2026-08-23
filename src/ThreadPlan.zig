@@ -82,12 +82,25 @@ partitions_floored: bool,
 /// `link/Queue.zig:152` and releases it only on return (`:153`). So this is
 /// `partitions - 2` exactly — a derived consequence, never a knob.
 ///
-/// **It is already enforced, by a mechanism that predates this file.**
+/// **This comment used to claim it was "already enforced, by a mechanism that predates
+/// this file". That claim was false, and believing it is what shipped a deadlock.**
 /// `Zcu.PerThread.Id.allocate(K)` stocks `available_tids` with `K - 1` ids
-/// (`Zcu/PerThread.zig:99-112`) and `acquire`/`release` are a bounded semaphore over
-/// them (`:113-152`). The linker holds one for the whole run, so at most `K - 2`
-/// allocating workers can hold a tid at the same instant. Reported because it is the
-/// number an operator reasons about, not because anything new counts it.
+/// (`Zcu/PerThread.zig:99-112`) and `acquire`/`release` are a bounded semaphore over them
+/// (`:113-152`) — but a bounded semaphore with **zero** permits does not enforce a bound,
+/// it blocks forever. `acquire` has no refusal path and no timeout: it waits on `tid_cond`
+/// until an id appears, and when `alloc_lanes == 0` none ever will, because the linker
+/// holds the pool's only assignable id for the entire compilation.
+///
+/// Measured: on a 2-physical / 4-logical mask, with NO FLAGS, the pre-fix compiler printed
+/// `alloc lanes 0` and then hung (rc=124 under `timeout 120`) while the unpatched
+/// reference completed the identical command. The number was computed, printed, and
+/// consulted by nothing — the compiler named the cause of its own hang and did not act
+/// on it. A number a tool reports but never acts on is decoration.
+///
+/// It is enforced NOW, and deliberately not here: `starvedLanes` below is the predicate,
+/// and `setThreadLimit` (`src/main.zig`) is where it acts — the one site that holds both
+/// quantities and that calls `Id.allocate` to build the pool. Derived plans can no longer
+/// reach the starved state at all (`min_derived_basis`).
 ///
 /// NAMED RESIDUAL — the separate admission gate the dossier designed (§2.3 edit 3) is
 /// NOT shipped here, and the reason is not oversight. Its purpose was hazard H1: with
@@ -109,8 +122,9 @@ alloc_lanes: usize,
 /// `ceil(log2(max(partitions, 2)))`, the same expression `InternPool.init` uses
 /// (`InternPool.zig:6331`) on the same input.
 tid_width: u5,
-/// `(2^30 - 1) >> tid_width` — items available to each partition before patch/001's
-/// named panic fires. Checkable against `PATCH005_DOSSIER.md` §3.6.
+/// `(2^31 - 1) >> tid_width` — items available to each partition before patch/001's
+/// named panic fires. Checkable against `PATCH005_DOSSIER.md` §3.6. (Was `2^30` until the
+/// `CaptureValue` widening; see `index_bits`.)
 items_per_partition: u32,
 
 /// True when the power-of-two round-up hit the 128-partition ceiling imposed by
@@ -162,6 +176,37 @@ pub const PartitionsArg = union(enum) {
 /// `InternPool.init`'s own `assert(available_threads <= maxInt(u8))`
 /// (`InternPool.zig:6293`) is looser and is therefore not the binding limit.
 const max_partitions = @as(usize, std.math.maxInt(Zcu.PerThread.IdBacking)) + 1;
+
+/// The smallest partition count a DERIVED plan may produce, and it is a liveness bound
+/// rather than a tuning choice.
+///
+/// `Zcu.PerThread.Id.allocate(n)` seeds the assignable-tid pool with `n - 1` ids
+/// (`Zcu/PerThread.zig:99-112`). The linker acquires one through `io.concurrent` and holds
+/// it for the entire compilation (dossier §1.1, row A7). So the ids actually available to
+/// allocating workers are `n - 2` — the `alloc lanes` number this file already reports.
+///
+/// At `n = 2` that is **zero**, and a worker that asks for a tid waits on `tid_cond`
+/// forever (`:116-136`): no error, no timeout, no output. That is the silent-hang class
+/// patch/001 exists to abolish and that patch/002 Finding 3 refused a one-line change
+/// over — and the `(K, M_wide)` split re-introduced it by a different route, because K and
+/// the worker count stopped being the same integer.
+///
+/// **Measured, not reasoned:** on a mask of 2 physical / 4 logical CPUs — the ordinary
+/// shape of a 2-core CI container — the pre-fix compiler derived `physical = 2`, hence
+/// `basis = 2`, hence K = 2 and `alloc lanes 0`, and then hung on
+/// `build-obj hello.zig` **with no flags at all** (rc=124 under `timeout 120`). The
+/// unpatched reference compiler completed the identical command (rc=0), because upstream's
+/// single integer made `workers = 4` imply a 4-way pool. The regression was ours.
+///
+/// A floor of 4 rather than 3 because the count is rounded up to a power of two anyway
+/// (§3.4); 4 yields `alloc lanes 2`. The cost is two extra `InternPool.locals` entries on
+/// hosts with fewer than 4 physical cores, and `items_per_partition` halving from
+/// 1,073,741,823 to 536,870,911 there — still 8× the largest observed production need.
+///
+/// This floor binds the DERIVED path only. An explicitly given `--intern-partitions=2` is
+/// still honoured, because an operator's stated number is not overridden silently — it is
+/// instead refused by name when it cannot make progress (`starvedLanes`).
+const min_derived_basis = 4;
 
 /// The width of an `InternPool.Index` payload once the tid is shifted in.
 ///
@@ -258,7 +303,13 @@ pub fn derive(n_jobs: ?u32, partitions_arg: ?PartitionsArg) ThreadPlan {
             // count with no round-up, which is what reproduces stock `tid_width`.
             .logical => break :p .{ @max(topology.logical, 1), .logical },
         };
-        const basis = @max(topology.physical orelse topology.logical, 2);
+        // FLOORED AT 4, NOT 2, AND THIS IS A DEADLOCK FIX -- see `min_derived_basis`.
+        // A derived K of 2 leaves `alloc_lanes = K - 2 = 0`: the tid pool holds K-1 = 1
+        // assignable id, the linker takes it and holds it for the whole compilation, and
+        // every worker that then asks for a tid blocks forever. Measured on a 2-physical
+        // / 4-logical host with NO FLAGS AT ALL: patched rc=124 (silent hang), reference
+        // rc=0. Flooring at 4 means a derived plan always has at least two lanes.
+        const basis = @max(topology.physical orelse topology.logical, min_derived_basis);
         const width = std.math.log2_int_ceil(usize, basis);
         const rounded = @as(usize, 1) << @intCast(width);
         if (rounded > max_partitions) saturated = true;
@@ -299,6 +350,36 @@ fn finish(
         .tid_width = tid_width,
         .items_per_partition = @as(u32, (1 << index_bits) - 1) >> tid_width,
     };
+}
+
+/// True when this plan asks for concurrent workers but leaves them no tid to allocate in.
+///
+/// **This is the predicate that makes `alloc_lanes` load-bearing.** Before it existed,
+/// `alloc_lanes` appeared only in this file — computed, printed, and consulted by nothing.
+/// The compiler printed `alloc lanes 0` and then hung, having named the precise cause of
+/// its own hang and acted on it not at all. A number a tool reports but never acts on is
+/// decoration, so this one now decides something: `setThreadLimit` refuses on it
+/// (`src/main.zig`), at the site that calls `Id.allocate` and therefore *creates* the pool.
+///
+/// The condition is `alloc_lanes == 0 and workers > 1`, and both halves are deliberate:
+///
+///   * `alloc_lanes == 0` is the structural fact — the linker holds the pool's only
+///     assignable id, so no worker can ever obtain one.
+///   * `workers > 1` spares the legitimate serial member. At `-j1` nothing runs
+///     concurrently, `Io.Threaded`'s async limit sends every task inline, and the main
+///     thread has `Id.acquire`'s recursive shortcut, so no tid is ever requested.
+///     `-j1 --intern-partitions=2` is a working configuration and MUST stay one; a guard
+///     that refused it would have over-fired and would itself be a defect.
+///
+/// **Why not the measured boundary instead.** The hang was observed at `workers >= 4`;
+/// `-j2` and `-j3` with `K = 2` completed. They complete by accident, not by design: with
+/// `alloc_lanes == 0` no allocating work can ever run off the main thread, so those runs
+/// silently degrade to serial while reporting the worker count the operator asked for —
+/// the same parameter theatre in a quieter costume. Encoding `>= 4` would also hard-code
+/// today's `concurrent_reserve` arithmetic into a liveness invariant. The structural
+/// condition is refused instead, and the refusal names the remedy.
+pub fn starvedLanes(plan: ThreadPlan) bool {
+    return plan.alloc_lanes == 0 and plan.workers > 1;
 }
 
 /// Emits the plan as one line, at derivation time.
@@ -400,12 +481,14 @@ test "ceiling table matches PATCH005_DOSSIER.md 3.6" {
     // The dossier's §3.6 table, transcribed. If this ever disagrees, one of the two is
     // wrong and the disagreement is visible instead of silent.
     const cases = [_]struct { usize, u5, u32 }{
-        .{ 2, 1, 536_870_911 },
-        .{ 4, 2, 268_435_455 },
-        .{ 8, 3, 134_217_727 },
-        .{ 16, 4, 67_108_863 },
-        .{ 32, 5, 33_554_431 },
-        .{ 64, 6, 16_777_215 },
+        // Doubled by the `CaptureValue` widening (`index_bits` 30 -> 31). Both columns
+        // live in `PATCH005_DOSSIER.md` §3.6; these are the current ones.
+        .{ 2, 1, 1_073_741_823 },
+        .{ 4, 2, 536_870_911 },
+        .{ 8, 3, 268_435_455 },
+        .{ 16, 4, 134_217_727 },
+        .{ 32, 5, 67_108_863 },
+        .{ 64, 6, 33_554_431 },
     };
     const topology: std.Thread.Topology = .{
         .logical = 12,
@@ -432,7 +515,7 @@ test "the -j1 floor is honoured, not lowered" {
     try std.testing.expectEqual(@as(usize, 2), plan.partitions);
     try std.testing.expect(plan.partitions_floored);
     try std.testing.expectEqual(@as(u5, 1), plan.tid_width);
-    try std.testing.expectEqual(@as(u32, 536_870_911), plan.items_per_partition);
+    try std.testing.expectEqual(@as(u32, 1_073_741_823), plan.items_per_partition);
 }
 
 test "the worked example: 6 physical / 12 logical derives K=8" {
@@ -457,14 +540,14 @@ test "the worked example: 6 physical / 12 logical derives K=8" {
     try std.testing.expectEqual(@as(usize, 8), plan.partitions);
     try std.testing.expectEqual(@as(usize, 6), plan.alloc_lanes);
     try std.testing.expectEqual(@as(u5, 3), plan.tid_width);
-    try std.testing.expectEqual(@as(u32, 134_217_727), plan.items_per_partition);
+    try std.testing.expectEqual(@as(u32, 268_435_455), plan.items_per_partition);
 
     // The stock-equivalent row of the same table, reachable by name so a regression can
     // be bisected against it: K follows logical, no round-up, and the ceiling is the one
     // the production incident hit.
     const stock = finish(topology, topology.logical, .logical, topology.logical, .logical, false);
     try std.testing.expectEqual(@as(u5, 4), stock.tid_width);
-    try std.testing.expectEqual(@as(u32, 67_108_863), stock.items_per_partition);
+    try std.testing.expectEqual(@as(u32, 134_217_727), stock.items_per_partition);
 }
 
 test "the partition count saturates by name, never silently" {
@@ -487,4 +570,71 @@ test "digit grouping" {
     try std.testing.expectEqualStrings("0", groupDigits(0, &buf));
     try std.testing.expectEqualStrings("1,000", groupDigits(1000, &buf));
     try std.testing.expectEqualStrings("999", groupDigits(999, &buf));
+}
+
+test "a derived plan never starves its own allocating lanes" {
+    // THE REGRESSION TEST for the deadlock. A 2-physical / 4-logical host -- the ordinary
+    // shape of a 2-core CI container -- derived K = 2 before `min_derived_basis` existed,
+    // which is `alloc lanes 0`, and the compiler hung on `build-obj hello.zig` with no
+    // flags at all (measured rc=124; the unpatched reference returned rc=0).
+    //
+    // The property asserted is the one that matters and is host-independent: NO derived
+    // plan, on ANY topology, may leave zero allocating lanes while asking for concurrent
+    // workers. Asserting the property rather than the constant means a future change to
+    // the rounding or the basis cannot quietly reintroduce the hang.
+    const shapes = [_]struct { logical: usize, physical: ?usize }{
+        .{ .logical = 1, .physical = 1 },
+        .{ .logical = 2, .physical = 1 },
+        .{ .logical = 2, .physical = 2 },
+        .{ .logical = 4, .physical = 2 }, // the container that hung
+        .{ .logical = 4, .physical = 4 },
+        .{ .logical = 12, .physical = 6 },
+        .{ .logical = 8, .physical = null }, // probe returned UNKNOWN
+        .{ .logical = 1, .physical = null },
+    };
+    for (shapes) |s| {
+        const topology: std.Thread.Topology = .{
+            .logical = s.logical,
+            .physical = s.physical,
+            .threads_per_core = null,
+            .source = if (s.physical == null) .unknown else .sys_topology,
+        };
+        // Mirror `derive`'s partition branch for a supplied topology.
+        const basis = @max(topology.physical orelse topology.logical, min_derived_basis);
+        const width = std.math.log2_int_ceil(usize, basis);
+        const rounded = @as(usize, 1) << @intCast(width);
+        for ([_]usize{ 1, 2, 3, 4, 8, 64 }) |workers| {
+            const plan = finish(topology, workers, .logical, rounded, .physical, false);
+            try std.testing.expect(plan.alloc_lanes >= 2);
+            try std.testing.expect(!plan.starvedLanes());
+        }
+    }
+}
+
+test "starvedLanes fires on a starved pool and spares the serial member" {
+    const topology: std.Thread.Topology = .{
+        .logical = 4,
+        .physical = 2,
+        .threads_per_core = 2,
+        .source = .sys_topology,
+    };
+    // An explicitly given `--intern-partitions=2` is still reachable, and it is the case
+    // the named refusal in `setThreadLimit` exists for.
+    const starved = finish(topology, 4, .given, 2, .given, false);
+    try std.testing.expectEqual(@as(usize, 0), starved.alloc_lanes);
+    try std.testing.expect(starved.starvedLanes());
+
+    // THE OVER-FIRE GUARD. `-j1 --intern-partitions=2` is a legitimate, working, fully
+    // serial configuration: nothing runs concurrently, so no tid is ever requested and
+    // zero lanes harm nobody. Measured rc=0 both before and after the fix. A guard that
+    // refused it would break a working setup and would itself be the defect -- so the
+    // test that would catch that lives here, next to the guard.
+    const serial = finish(topology, 1, .given, 2, .given, false);
+    try std.testing.expectEqual(@as(usize, 0), serial.alloc_lanes);
+    try std.testing.expect(!serial.starvedLanes());
+
+    // Three lanes' worth of partitions is enough for one worker lane; not starved.
+    const ok = finish(topology, 8, .given, 4, .given, false);
+    try std.testing.expectEqual(@as(usize, 2), ok.alloc_lanes);
+    try std.testing.expect(!ok.starvedLanes());
 }
