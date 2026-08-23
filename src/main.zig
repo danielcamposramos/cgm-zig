@@ -6316,7 +6316,9 @@ const usage_ast_check =
     \\                        graph (Crown stage 0.5 rung 1; requires [file], not stdin)
     \\  --check-decls         Also resolve top-level declaration references reached via
     \\                        @import (Crown stage 0.5 rung 2, "sema-lite"; requires
-    \\                        --module-graph)
+    \\                        --module-graph). Must be run from the same working directory
+    \\                        the graph was emitted from: the graph records each module's
+    \\                        root relative to that directory.
     \\
     \\
 ;

@@ -51,6 +51,7 @@ const Ast = std.zig.Ast;
 const Color = std.zig.Color;
 const ErrorBundle = std.zig.ErrorBundle;
 const fatal = std.process.fatal;
+const introspect = @import("introspect.zig");
 
 /// The subset of `Compilation/EmitModuleGraph.zig`'s `Graph` schema that rungs 1 and 2
 /// read. Deliberately not the full schema: `std.json`'s default `ignore_unknown_fields =
@@ -69,13 +70,13 @@ const fatal = std.process.fatal;
 /// Measured on the promoted 0.16.0 compiler: `parseFromSliceLeaky(struct { a: usize }, "{}")`
 /// -> `error.MissingField`; with `a: usize = 7` -> parses. Defaulting instead means an old
 /// or hand-written document still loads for rung 1, and `--check-decls` refuses it *by
-/// name* (`requireRung2Fields` below) instead of dying in the JSON decoder with a message
+/// name* (`rung2FieldGap` below) instead of dying in the JSON decoder with a message
 /// that names neither the flag nor the field (doctrine 2).
 ///
 /// The cost of the default, stated: for `index`/`root`/`root_src_path`, an explicit JSON
 /// `null` is now indistinguishable from an absent field. Stage 0 always emits all three as
 /// non-null, so the two cases only ever co-occur on a malformed document, and
-/// `requireRung2Fields`'s wording says "missing or null" rather than claiming to know
+/// `rung2FieldGap`'s wording says "missing or null" rather than claiming to know
 /// which. `dep_index` is the one field where `null` is stage 0's own meaningful value
 /// ("dependency module not found in `module_roots`"), and there it keeps that meaning.
 const GraphDoc = struct {
@@ -174,11 +175,21 @@ pub fn checkAgainstGraph(
     // fields, so they are optional in `ModuleDoc` and their absence is refused here, by
     // name, naming the flag and the field -- never by `error.MissingField` out of the JSON
     // decoder, which would have named neither and would have fired on rung-1-only runs too.
+    var graph_base: []const u8 = "";
     if (check_decls) {
         if (try rung2FieldGap(arena, graph)) |gap| fatal(
             "module graph '{s}' cannot satisfy --check-decls: {s}. Re-emit the graph with a compiler that includes Crown stage 0 (-femit-module-graph emits index/root/root_src_path on every module), or drop --check-decls to run the rung-1 import check alone",
             .{ graph_path, gap },
         );
+        // Review finding MAJOR 4: rung 2 resolves a named module to a file on disk through
+        // the graph's `root`, and that string is NOT self-describing. See
+        // `resolveGraphBase`'s doc comment for the whole premise and why it is declared
+        // here, once, instead of being left implicit in whatever cwd an `open` syscall
+        // happens to inherit.
+        graph_base = switch (try resolveGraphBase(arena, io)) {
+            .ok => |b| b,
+            .err => |msg| fatal("{s}", .{msg}),
+        };
     }
 
     // The union of every declared import-edge name in the graph, plus the root roles
@@ -264,7 +275,7 @@ pub fn checkAgainstGraph(
     // (rung 2) reports both in one bundle instead of the operator needing two invocations.
     var decl_stats: DeclStats = .{};
     if (check_decls) {
-        try checkDeclExistence(arena, io, tree, display_path, checked_dir, graph, &wip_errors, &had_error, &decl_stats);
+        try checkDeclExistence(arena, io, tree, display_path, checked_dir, graph_base, graph, &wip_errors, &had_error, &decl_stats);
     }
 
     if (had_error) {
@@ -414,6 +425,55 @@ fn rung2FieldGap(arena: Allocator, graph: GraphDoc) Allocator.Error!?[]const u8 
     return null;
 }
 
+/// Result of establishing rung 2's resolution base: the absolute directory a relative
+/// `ModuleNode.root` is joined against, or the failure message to refuse with.
+const GraphBaseOutcome = union(enum) {
+    ok: []const u8,
+    err: []const u8,
+};
+
+/// Establishes -- and thereby DECLARES -- the base that a relative `ModuleNode.root` is
+/// resolved against. Review finding MAJOR 4:
+///
+///   "graph root paths are rendered cwd-relative to the EMITTING process
+///   (Compilation.Path.Formatter -> absToCwdRelative; '.' for zig_lib) -- running from any
+///   other directory makes every named-module target 'unreadable'; resolution premise needs
+///   a declared base or a documented same-cwd contract with a named refusal."
+///
+/// The mechanism, verified in this tree rather than assumed: `Compilation.zig`'s
+/// `Path.Formatter.format` renders a `.none`-rooted path through `absToCwdRelative`
+/// (Compilation.zig:481, helper at :498), which strips the emitting process's own cwd
+/// prefix and returns "." when the path IS the cwd; a `.zig_lib`-rooted path renders as
+/// `dirs.zig_lib.path orelse "."` (Compilation.zig:477). So a graph document's `root`
+/// strings are meaningful only relative to the directory the compiler was run from when
+/// `-femit-module-graph` fired. Nothing in the document records what that directory was.
+///
+/// This fork takes the review's second branch -- a documented same-cwd contract with a
+/// named refusal -- and NOT the first (a `--graph-base=<dir>` flag), because that would be
+/// a new user-visible interface on a rung whose flag surface is still under review, and
+/// because it matches the precedent already set one rung over: rung 4's `resolveAsModule`
+/// resolves the very same `root` field against this process's cwd and documents the same
+/// inherited caveat. The alternative is named as a residual in the commit that lands this,
+/// for the desk, rather than decided here.
+///
+/// THE CONTRACT, stated so an operator can meet it: run `ast-check --check-decls` from the
+/// same working directory the graph was emitted from. It is the same requirement a relative
+/// `--module-graph=<path>` argument already imposes, made explicit instead of implicit.
+///
+/// What this function buys beyond the status quo: the base becomes one named value resolved
+/// once, so when it cannot be established at all (`getResolvedCwd` fails -- e.g. the cwd was
+/// removed out from under the process) the whole `--check-decls` request is refused BY NAME
+/// here, instead of every named module silently reporting `target_unreadable` and the
+/// operator concluding their graph was wrong when in fact the checker had no base.
+fn resolveGraphBase(arena: Allocator, io: Io) Allocator.Error!GraphBaseOutcome {
+    const cwd = introspect.getResolvedCwd(io, arena) catch |err| return .{ .err = try std.fmt.allocPrint(
+        arena,
+        "--check-decls cannot resolve module roots: the module graph records each module's root relative to the directory the graph was EMITTED from (Compilation.zig's Path.Formatter/absToCwdRelative), so this process's own working directory is the base they must be joined against -- and it could not be resolved ({t}). Refusing rather than guessing a base, which would report every named module's target as unreadable and blame the graph",
+        .{err},
+    ) };
+    return .{ .ok = cwd };
+}
+
 /// Target module/file identified for a named import: the graph's `ModuleNode.root` and
 /// `root_src_path`, joined to locate the module's root source file on disk.
 const ModuleTarget = struct {
@@ -479,6 +539,10 @@ fn checkDeclExistence(
     tree: Ast,
     display_path: []const u8,
     checked_dir: []const u8,
+    /// The declared base a relative `ModuleNode.root` is joined against -- see
+    /// `resolveGraphBase` (review finding MAJOR 4). Always a resolved absolute directory on
+    /// a call that got here: `checkAgainstGraph` refuses by name otherwise.
+    graph_base: []const u8,
     graph: GraphDoc,
     wip_errors: *ErrorBundle.Wip,
     had_error: *bool,
@@ -652,7 +716,7 @@ fn checkDeclExistence(
 
         switch (try directImportPath(arena, tree, lhs)) {
             .path => |import_path| {
-                try classifyMemberRef(arena, io, tree, display_path, checked_dir, &named_targets, &target_cache, wip_errors, had_error, stats, import_path, member_name, node);
+                try classifyMemberRef(arena, io, tree, display_path, checked_dir, graph_base, &named_targets, &target_cache, wip_errors, had_error, stats, import_path, member_name, node);
                 continue;
             },
             // Shape (a) on an import whose operand does not parse: the reference IS
@@ -675,7 +739,7 @@ fn checkDeclExistence(
                 continue;
             }
             if (simple_aliases.get(base_name)) |import_path| {
-                try classifyMemberRef(arena, io, tree, display_path, checked_dir, &named_targets, &target_cache, wip_errors, had_error, stats, import_path, member_name, node);
+                try classifyMemberRef(arena, io, tree, display_path, checked_dir, graph_base, &named_targets, &target_cache, wip_errors, had_error, stats, import_path, member_name, node);
                 continue;
             }
         }
@@ -738,6 +802,8 @@ fn classifyMemberRef(
     tree: Ast,
     display_path: []const u8,
     checked_dir: []const u8,
+    /// See `resolveGraphBase` (review finding MAJOR 4).
+    graph_base: []const u8,
     named_targets: *const std.StringHashMapUnmanaged(?ModuleTarget),
     target_cache: *std.StringHashMapUnmanaged(TargetOutcome),
     wip: *ErrorBundle.Wip,
@@ -764,7 +830,13 @@ fn classifyMemberRef(
             stats.target_unresolvable += 1;
             return;
         };
-        break :named_blk try std.fs.path.join(arena, &.{ mt.root, mt.root_src_path });
+        // Joined against the DECLARED base, not against whatever cwd the later `openFile`
+        // would have inherited (review finding MAJOR 4). `mt.root` is meaningful only
+        // relative to the directory the graph was emitted from; `graph_base` is this
+        // process's resolved cwd, established and refused-by-name once in
+        // `checkAgainstGraph`. An already-absolute `root` is used as-is -- `std.fs.path
+        // .resolve` resets on an absolute component, unlike `join`, which does not.
+        break :named_blk try std.fs.path.resolve(arena, &.{ graph_base, mt.root, mt.root_src_path });
     };
 
     const outcome = target_cache.get(resolved_path) orelse resolve_blk: {
@@ -780,7 +852,7 @@ fn classifyMemberRef(
         .opaque_target => stats.opaque_skipped += 1,
         .unreadable => {
             had_error.* = true;
-            try addImportError(wip, tree, display_path, ref_node, "cannot check member '{s}': target file '{s}' could not be read or parsed as Zig source -- the check was requested and cannot honestly pass", .{ member_name, resolved_path });
+            try addImportError(wip, tree, display_path, ref_node, "cannot check member '{s}': target file '{s}' could not be read or parsed as Zig source -- the check was requested and cannot honestly pass (if this is a NAMED module: the graph records module roots relative to the directory -femit-module-graph ran in, so --check-decls must run from that same directory; this run resolved against base '{s}')", .{ member_name, resolved_path, graph_base });
             // `target_unreadable`, NOT `missing` (review finding MAJOR 5). Both are errors,
             // but they are different facts: `missing` says the compiler will reject this
             // program, `target_unreadable` says this checker could not look. Folding the
