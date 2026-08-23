@@ -131,7 +131,13 @@ pub fn main(init: process.Init.Minimal) !void {
     // behaviour) and `declared` stay reachable by name. See `StepOrder`.
     var step_order: StepOrder = .layered;
     // How many workers each child compiler is told to use. See `ChildJobs`.
-    var child_jobs: ChildJobs = .share;
+    // The default is `keep` -- stock behaviour. It shipped as `share` for exactly one
+    // verification cycle: V-S4b measured `share` SLOWER in 3 of 3 paired slots (+6.4% at
+    // the median) and rider 2's own rule was unconditional -- "if propagation is slower,
+    // the derived default reverts to keep". `share` stays reachable by name because its
+    // thread-count win is real and large (V-S4a: 38 -> 13 peak worker threads on an
+    // 8-CPU mask); it is a member, not the default. See `ChildJobs.share`.
+    var child_jobs: ChildJobs = .keep;
     var max_rss: u64 = 0;
     var skip_oom_steps = false;
     var test_timeout_ns: ?u64 = null;
@@ -1334,7 +1340,8 @@ fn printTreeStep(
 /// that produces a number, and it is exact -- `N` steps x `logical / N` workers is
 /// `logical`.
 const ChildJobs = union(enum) {
-    /// Divide the host among the authorised concurrent steps. THE DERIVED DEFAULT.
+    /// Divide the host among the authorised concurrent steps. A SELECTABLE MEMBER --
+    /// it was the derived default for exactly one verification cycle and lost its own gate.
     ///
     /// It applies only when `-j` was actually given, and that restraint is deliberate.
     /// Without `-j`, the step width is not an operator's request -- it is itself derived
@@ -1342,9 +1349,32 @@ const ChildJobs = union(enum) {
     /// same machine and, on a project whose build is one large compile step, would hand
     /// that step a fraction of the host it should own outright. Nothing to share means
     /// nothing is shared, and the printed line says which case applied.
+    ///
+    /// WHY IT IS NOT THE DEFAULT, measured rather than argued. V-S4b, 6-executable
+    /// project, `-j4`, 3 repeats alternated, `taskset -c 4-11`, contended:
+    ///
+    ///     share  4.928 4.774 4.710  median 4.774 s   slower in 3/3 paired slots
+    ///     keep   4.780 4.427 4.487  median 4.487 s
+    ///
+    /// +0.287 s / +6.4% at the median, with no paired slot going the other way. Rider 2's
+    /// own acceptance rule was written unconditionally -- "if propagation is slower, the
+    /// derived default reverts to `keep`" -- so it reverted.
+    ///
+    /// TWO HONESTIES OWED, because this is a trade-off and not a refutation:
+    ///  * The oversubscription `share` exists to stop is REAL and larger than predicted.
+    ///    V-S4a sampled peak worker threads across the same build: `keep` 38, `share` 13,
+    ///    against an 8-CPU affinity mask -- 4.75x the CPUs the process may use. That claim
+    ///    is not withdrawn, which is why `share` stays a member rather than being deleted.
+    ///  * The peak-RSS half of V-S4b was NOT measured. `share`'s claimed memory win is
+    ///    UNKNOWN, not refuted.
+    ///
+    /// The fixture is also small and each compile short -- exactly the regime where
+    /// cutting a child from `-j8` to `-j2` hurts most and where oversubscription costs
+    /// least. A large project could invert this. Anyone with such a project should measure
+    /// it and say so here; until then the default follows the only measurement that exists.
     share,
     /// Pass nothing; every child derives the whole host, exactly as before this fork.
-    /// Kept reachable by name so a regression can be bisected against it.
+    /// THE DEFAULT, restored by V-S4b. A stock invocation behaves stock.
     keep,
     /// Pass `-j<N>` verbatim.
     fixed: u32,
@@ -1973,11 +2003,13 @@ fn printUsage(b: *std.Build, w: *Writer) !void {
         \\  --build-runner [file]        Override path to build runner
         \\  --seed [integer]             For shuffling dependency traversal order (default: random)
         \\  --child-jobs=[share|keep|N]  Workers each spawned compiler is given.
-        \\                               share (default): with -jN, divide the host's
-        \\                               logical CPUs among the N concurrent steps, so
-        \\                               -jN cannot authorise N x cores threads. keep:
-        \\                               pass nothing and let each child derive the whole
-        \\                               host, as before. N: pass -jN verbatim.
+        \\                               keep (default): pass nothing, each child derives
+        \\                               the whole host, as before. share: with -jN, divide
+        \\                               the host's logical CPUs among the N concurrent
+        \\                               steps, so -jN cannot authorise N x cores threads
+        \\                               (measured 6.4% slower on a small project, but it
+        \\                               cuts peak worker threads 38 -> 13). N: pass -jN
+        \\                               verbatim.
         \\  --step-order=[layered|random|declared]
         \\                               Order among steps whose dependencies are all met.
         \\                               layered (default): dependency depth ascending,
