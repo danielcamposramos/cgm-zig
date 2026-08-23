@@ -439,17 +439,34 @@ const TargetOutcome = union(enum) {
     decls: std.StringHashMapUnmanaged(void),
 };
 
-/// Honest denominators for rung 2's summary line, matching rung 1's `Stats` idiom:
-/// `validated + missing + opaque_skipped + alias_too_deep + target_unresolvable + exempt`
-/// equals every import-derived member reference found in the checked file, so the operator
-/// can reconcile the summary against the source exactly as with rung 1's line.
+/// Honest denominators for rung 2's summary line, matching rung 1's `Stats` idiom: the sum
+/// of every field below equals every import-derived member reference found in the checked
+/// file, so the operator can reconcile the summary against the source exactly as with rung
+/// 1's line. `printDeclSummary` prints that sum as the denominator, computed from the
+/// fields rather than tracked separately, so the two can never disagree.
 const DeclStats = struct {
     validated: usize = 0,
     missing: usize = 0,
     opaque_skipped: usize = 0,
     alias_too_deep: usize = 0,
     target_unresolvable: usize = 0,
+    /// Review finding MAJOR 5: a target that could not be READ or PARSED is not the same
+    /// answer as "the declaration is not there," and folding the two lost the difference
+    /// between a failed instrument and a failed program. An absent instrument reports
+    /// UNKNOWN, never a verdict (doctrine 2). Still an error -- the requested check could
+    /// not run -- but counted apart from `missing`, which now means only what it says.
+    target_unreadable: usize = 0,
+    /// Review finding MINOR 9: a member reference through an `@import` whose string literal
+    /// does not parse. Rung 1 counts the import SITE as `skipped_nonliteral`; this is rung
+    /// 2's counterpart for the member REFERENCES through it -- a different denominator over
+    /// a different population, which is why it is its own field and not a shared one.
+    operand_unparsable: usize = 0,
     exempt: usize = 0,
+
+    fn total(s: DeclStats) usize {
+        return s.validated + s.missing + s.opaque_skipped + s.alias_too_deep +
+            s.target_unresolvable + s.target_unreadable + s.operand_unparsable + s.exempt;
+    }
 };
 
 /// Entry point for rung 2, called from `checkAgainstGraph` only when `--check-decls` was
@@ -503,6 +520,10 @@ fn checkDeclExistence(
     // collect-then-fixpoint rather than a single linear scan.
     const RootBindingKind = union(enum) {
         direct_import: []const u8,
+        /// Bound to an `@import` whose string literal does not parse (review finding MINOR
+        /// 9). Import-derived, but its target is unknowable here -- references through it
+        /// are counted `operand_unparsable`, never silently dropped and never guessed.
+        unparsable_import,
         identifier_ref: []const u8,
         other,
     };
@@ -516,7 +537,11 @@ fn checkDeclExistence(
                 const is_const = tree.tokenTag(vd.ast.mut_token) == .keyword_const;
                 const init_node = vd.ast.init_node.unwrap() orelse continue;
                 const kind: RootBindingKind = k: {
-                    if (try directImportPath(arena, tree, init_node)) |p| break :k .{ .direct_import = p };
+                    switch (try directImportPath(arena, tree, init_node)) {
+                        .path => |p| break :k .{ .direct_import = p },
+                        .operand_unparsable => break :k .unparsable_import,
+                        .not_import => {},
+                    }
                     if (tree.nodeTag(init_node) == .identifier) {
                         break :k .{ .identifier_ref = tree.tokenSlice(tree.nodeMainToken(init_node)) };
                     }
@@ -530,6 +555,7 @@ fn checkDeclExistence(
 
     var simple_aliases: std.StringHashMapUnmanaged([]const u8) = .empty;
     var deep_alias_names: std.StringHashMapUnmanaged(void) = .empty;
+    var unparsable_alias_names: std.StringHashMapUnmanaged(void) = .empty;
     {
         var it = root_bindings.iterator();
         while (it.next()) |entry| switch (entry.value_ptr.kind) {
@@ -539,6 +565,7 @@ fn checkDeclExistence(
                 // `var`, not `const`: reassignable, so not the single-level shape (b)
                 // above documents as followable -- "any other flow" in the section comment.
                 try deep_alias_names.put(arena, entry.key_ptr.*, {}),
+            .unparsable_import => try unparsable_alias_names.put(arena, entry.key_ptr.*, {}),
             else => {},
         };
         // Fixpoint: `const n = m;` where `m` is (transitively) import-derived makes `n`
@@ -569,13 +596,31 @@ fn checkDeclExistence(
 
     var target_cache: std.StringHashMapUnmanaged(TargetOutcome) = .empty;
 
-    // --- Pass 2: one walk of every node for (1) local (non-root) const/var bindings bound
-    // directly to `@import` -- the "locals" case from the section comment above, folded
-    // into `deep_alias_names` by name (relies on Zig's declare-before-use rule for locals to
-    // land before any use in this single forward pass; a miss here only ever *undercounts*
-    // `alias_too_deep`, never misclassifies a reference as validated) -- and (2) every
-    // `field_access` node, classified per the section comment above.
     const node_count: u32 = @intCast(tree.nodes.len);
+
+    // --- Pass 2: every non-root const/var binding bound directly to `@import` -- the
+    // "locals" case from the section comment above -- folded into `deep_alias_names` (or
+    // `unparsable_alias_names`) by name.
+    //
+    // This is its OWN complete walk, finished before any classification happens, and that
+    // separation is the fix for review finding MAJOR 3. It used to share one forward walk
+    // with the classification below, justified by "Zig's declare-before-use rule for
+    // locals." That rule does not cover the case that matters: a binding inside a NESTED
+    // CONTAINER is a container decl, and container decls are order-independent, so
+    //
+    //     const S = struct {
+    //         pub fn f() void { _ = m.foo; }   // lower node index -- classified first
+    //         const m = @import("x.zig");      // higher node index -- collected too late
+    //     };
+    //
+    // reached the `m.foo` classification with `m` in no set at all. It then matched neither
+    // shape (a) nor (b) and fell out of EVERY bucket -- so `DeclStats`'s documented claim
+    // that its buckets sum to "every import-derived member reference found in the checked
+    // file" was false, and the denominator the operator reconciles against was silently
+    // short. The prior comment's "a miss here only ever undercounts `alias_too_deep`" was
+    // itself the admission: an undercount in a denominator is exactly what doctrine forbids.
+    // Two walks cost one extra linear pass over `tree.nodes` and make the result
+    // order-independent, which is what the language actually is.
     var node_idx: u32 = 0;
     while (node_idx < node_count) : (node_idx += 1) {
         const node: Ast.Node.Index = @enumFromInt(node_idx);
@@ -584,59 +629,104 @@ fn checkDeclExistence(
                 if (root_decl_set.contains(node)) continue; // already resolved in pass 1
                 const vd = tree.fullVarDecl(node).?;
                 const init_node = vd.ast.init_node.unwrap() orelse continue;
-                if (try directImportPath(arena, tree, init_node)) |_| {
-                    try deep_alias_names.put(arena, tree.tokenSlice(vd.ast.mut_token + 1), {});
+                const name = tree.tokenSlice(vd.ast.mut_token + 1);
+                switch (try directImportPath(arena, tree, init_node)) {
+                    .path => try deep_alias_names.put(arena, name, {}),
+                    .operand_unparsable => try unparsable_alias_names.put(arena, name, {}),
+                    .not_import => {},
                 }
-            },
-            .field_access => {
-                const lhs, const member_tok = tree.nodeData(node).node_and_token;
-                const member_name = tree.tokenSlice(member_tok);
-
-                if (try directImportPath(arena, tree, lhs)) |import_path| {
-                    try classifyMemberRef(arena, io, tree, display_path, checked_dir, &named_targets, &target_cache, wip_errors, had_error, stats, import_path, member_name, node);
-                    continue;
-                }
-                if (tree.nodeTag(lhs) == .identifier) {
-                    const base_name = tree.tokenSlice(tree.nodeMainToken(lhs));
-                    if (deep_alias_names.contains(base_name)) {
-                        stats.alias_too_deep += 1;
-                        continue;
-                    }
-                    if (simple_aliases.get(base_name)) |import_path| {
-                        try classifyMemberRef(arena, io, tree, display_path, checked_dir, &named_targets, &target_cache, wip_errors, had_error, stats, import_path, member_name, node);
-                        continue;
-                    }
-                }
-                // Neither shape (a) nor (b): an ordinary field access unrelated to an
-                // import (or a deeper chain like `m.sub.foo`, out of scope by design) -- not
-                // a member ref on an import result, so not counted in any bucket.
             },
             else => {},
         }
     }
+
+    // --- Pass 3: every `field_access` node, classified per the section comment above.
+    // Runs only after pass 2 has seen the whole tree, so classification no longer depends
+    // on where in the file a binding happens to sit (review finding MAJOR 3).
+    node_idx = 0;
+    while (node_idx < node_count) : (node_idx += 1) {
+        const node: Ast.Node.Index = @enumFromInt(node_idx);
+        if (tree.nodeTag(node) != .field_access) continue;
+        const lhs, const member_tok = tree.nodeData(node).node_and_token;
+        const member_name = tree.tokenSlice(member_tok);
+
+        switch (try directImportPath(arena, tree, lhs)) {
+            .path => |import_path| {
+                try classifyMemberRef(arena, io, tree, display_path, checked_dir, &named_targets, &target_cache, wip_errors, had_error, stats, import_path, member_name, node);
+                continue;
+            },
+            // Shape (a) on an import whose operand does not parse: the reference IS
+            // import-derived, so it belongs in the denominator -- in its own bucket, not
+            // dropped (review finding MINOR 9).
+            .operand_unparsable => {
+                stats.operand_unparsable += 1;
+                continue;
+            },
+            .not_import => {},
+        }
+        if (tree.nodeTag(lhs) == .identifier) {
+            const base_name = tree.tokenSlice(tree.nodeMainToken(lhs));
+            if (unparsable_alias_names.contains(base_name)) {
+                stats.operand_unparsable += 1;
+                continue;
+            }
+            if (deep_alias_names.contains(base_name)) {
+                stats.alias_too_deep += 1;
+                continue;
+            }
+            if (simple_aliases.get(base_name)) |import_path| {
+                try classifyMemberRef(arena, io, tree, display_path, checked_dir, &named_targets, &target_cache, wip_errors, had_error, stats, import_path, member_name, node);
+                continue;
+            }
+        }
+        // Neither shape (a) nor (b): an ordinary field access unrelated to an import (or a
+        // deeper chain like `m.sub.foo`, out of scope by design) -- not a member ref on an
+        // import result, so not counted in any bucket.
+    }
 }
 
-/// If `node` is exactly `@import("literal")`, returns the parsed import path; otherwise
-/// null. A small, standalone counterpart to rung 1's own inline `@import`-node parsing
-/// (embedded in `checkAgainstGraph`'s error-emitting walk, where extracting a shared helper
-/// would cost more churn than it saves) -- kept deliberately separate per minimal-hunks.
-fn directImportPath(arena: Allocator, tree: Ast, node: Ast.Node.Index) !?[]const u8 {
+/// What `directImportPath` found at a node. Three outcomes, not two (review finding MINOR
+/// 9): `not_import` and `operand_unparsable` were previously both spelled `null`, so a
+/// reference through an `@import` whose string literal did not parse was indistinguishable
+/// from an ordinary field access and fell into NO bucket at all -- silent, where rung 1
+/// counts the very same site as `skipped_nonliteral`. Rung 2 now has its own counterpart.
+const DirectImport = union(enum) {
+    /// The node is not an `@import("<literal>")` call at all.
+    not_import,
+    /// The node IS `@import(<string literal>)`, but the literal does not parse (a malformed
+    /// escape sequence, which a real compile diagnoses via AstGen). The import exists; its
+    /// path is unknowable here. Never guessed, never silently dropped -- counted.
+    operand_unparsable,
+    path: []const u8,
+};
+
+/// If `node` is exactly `@import("literal")`, returns the parsed import path. A small,
+/// standalone counterpart to rung 1's own inline `@import`-node parsing (embedded in
+/// `checkAgainstGraph`'s error-emitting walk, where extracting a shared helper would cost
+/// more churn than it saves) -- kept deliberately separate per minimal-hunks.
+fn directImportPath(arena: Allocator, tree: Ast, node: Ast.Node.Index) Allocator.Error!DirectImport {
     switch (tree.nodeTag(node)) {
         .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {},
-        else => return null,
+        else => return .not_import,
     }
     const builtin_token = tree.nodeMainToken(node);
-    if (!mem.eql(u8, tree.tokenSlice(builtin_token), "@import")) return null;
+    if (!mem.eql(u8, tree.tokenSlice(builtin_token), "@import")) return .not_import;
 
     var params_buf: [2]Ast.Node.Index = undefined;
-    const params = tree.builtinCallParams(&params_buf, node) orelse return null;
-    if (params.len != 1) return null;
+    const params = tree.builtinCallParams(&params_buf, node) orelse return .not_import;
+    if (params.len != 1) return .not_import;
     const operand = params[0];
-    if (tree.nodeTag(operand) != .string_literal) return null;
+    if (tree.nodeTag(operand) != .string_literal) return .not_import;
 
     const str_token = tree.nodeMainToken(operand);
     const raw = tree.tokenSlice(str_token);
-    return std.zig.string_literal.parseAlloc(arena, raw) catch null;
+    // `parseAlloc` fails only on a malformed escape; `error.OutOfMemory` must NOT be
+    // laundered into "unparsable operand", so the two are separated here rather than both
+    // swallowed by one `catch` (which is what the head commit's `catch null` did).
+    return if (std.zig.string_literal.parseAlloc(arena, raw)) |p| .{ .path = p } else |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.InvalidLiteral => .operand_unparsable,
+    };
 }
 
 /// Resolves one member reference (`import_path`.`member_name`, referenced at `ref_node` in
@@ -691,7 +781,11 @@ fn classifyMemberRef(
         .unreadable => {
             had_error.* = true;
             try addImportError(wip, tree, display_path, ref_node, "cannot check member '{s}': target file '{s}' could not be read or parsed as Zig source -- the check was requested and cannot honestly pass", .{ member_name, resolved_path });
-            stats.missing += 1;
+            // `target_unreadable`, NOT `missing` (review finding MAJOR 5). Both are errors,
+            // but they are different facts: `missing` says the compiler will reject this
+            // program, `target_unreadable` says this checker could not look. Folding the
+            // second into the first told the operator we had checked when we had not.
+            stats.target_unreadable += 1;
         },
         .decls => |names| if (names.contains(member_name)) {
             stats.validated += 1;
@@ -770,14 +864,16 @@ fn printDeclSummary(io: Io, stats: DeclStats) !void {
     defer io.unlockStderr();
     const w = &locked.file_writer.interface;
     try w.print(
-        "member refs seen {d}: validated {d}, missing {d}, opaque-skipped {d}, alias-too-deep {d}, target-unresolvable {d}, exempt {d}\n",
+        "member refs seen {d}: validated {d}, missing {d}, opaque-skipped {d}, alias-too-deep {d}, target-unresolvable {d}, target-unreadable {d}, operand-unparsable {d}, exempt {d}\n",
         .{
-            stats.validated + stats.missing + stats.opaque_skipped + stats.alias_too_deep + stats.target_unresolvable + stats.exempt,
+            stats.total(),
             stats.validated,
             stats.missing,
             stats.opaque_skipped,
             stats.alias_too_deep,
             stats.target_unresolvable,
+            stats.target_unreadable,
+            stats.operand_unparsable,
             stats.exempt,
         },
     );
