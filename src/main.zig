@@ -35,10 +35,12 @@ const mingw = @import("libs/mingw.zig");
 const dev = @import("dev.zig");
 const AstCheckImports = @import("AstCheckImports.zig");
 const AstCheckBatch = @import("AstCheckBatch.zig");
+const ThreadPlan = @import("ThreadPlan.zig");
 
 test {
     _ = Package;
     _ = @import("codegen.zig");
+    _ = ThreadPlan;
 }
 
 const thread_stack_size = 60 << 20;
@@ -3480,11 +3482,14 @@ fn buildOutputType(
         },
     };
 
-    const thread_limit = @min(
-        @max(n_jobs orelse std.Thread.getCpuCount() catch 1, 1),
-        std.math.maxInt(Zcu.PerThread.IdBacking),
-    );
-    try setThreadLimit(arena, thread_limit);
+    // How much of the host this process will use, derived from a topology probe and
+    // reported in one line. `ThreadPlan` reproduces the derivation that used to live
+    // inline here; see `src/ThreadPlan.zig` for what each number means and
+    // `docs/crown/PATCH005_DOSSIER.md` §3 for why the report is unconditional.
+    const thread_plan: ThreadPlan = .derive(n_jobs);
+    thread_plan.report();
+    const thread_limit = thread_plan.workers;
+    try setThreadLimit(arena, thread_plan);
 
     for (create_module.c_source_files.items) |*src| {
         dev.check(.c_compiler);
@@ -5263,11 +5268,12 @@ fn cmdBuild(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8, 
     child_argv.items[argv_index_global_cache_dir] = dirs.global_cache.path orelse cwd_path;
     child_argv.items[argv_index_cache_dir] = dirs.local_cache.path orelse cwd_path;
 
-    const thread_limit = @min(
-        @max(n_jobs orelse std.Thread.getCpuCount() catch 1, 1),
-        std.math.maxInt(Zcu.PerThread.IdBacking),
-    );
-    try setThreadLimit(arena, thread_limit);
+    // Second of the three derivation sites (`zig build`). The dossier's §0 correction 1
+    // reported one; there are three, and all three funnel into `setThreadLimit`.
+    const thread_plan: ThreadPlan = .derive(n_jobs);
+    thread_plan.report();
+    const thread_limit = thread_plan.workers;
+    try setThreadLimit(arena, thread_plan);
 
     // Dummy http client that is not actually used when fetch_command is unsupported.
     // Prevents bootstrap from depending on a bunch of unnecessary stuff.
@@ -5753,11 +5759,12 @@ fn jitCmd(
     });
     defer root_prog_node.end();
 
-    const thread_limit = @min(
-        @max(std.Thread.getCpuCount() catch 1, 1),
-        std.math.maxInt(Zcu.PerThread.IdBacking),
-    );
-    try setThreadLimit(arena, thread_limit);
+    // Third derivation site (`jitCmd`: `zig fmt`, `zig reduce`, ...). No `-j` reaches
+    // here, so the plan is fully derived.
+    const thread_plan: ThreadPlan = .derive(null);
+    thread_plan.report();
+    const thread_limit = thread_plan.workers;
+    try setThreadLimit(arena, thread_plan);
 
     return jitCmdInner(gpa, arena, io, args, environ_map, root_prog_node, thread_limit, options);
 }
@@ -7909,20 +7916,29 @@ const IoImpl = switch (build_options.io_mode) {
     .evented => Io.Evented,
 };
 var io_impl_ptr: *IoImpl = undefined;
-fn setThreadLimit(arena: std.mem.Allocator, n: usize) Allocator.Error!void {
+/// Applies a `ThreadPlan` to the process: the I/O limits that bound worker concurrency,
+/// and the tid pool that bounds `InternPool` partitions.
+///
+/// These two used to receive the same integer. They still do — `ThreadPlan.derive`
+/// currently produces `workers == partitions` — but they arrive here as two named
+/// quantities so that the split designed in `docs/crown/PATCH005_DOSSIER.md` §3.4 is a
+/// change to one derivation rather than a change to every caller.
+fn setThreadLimit(arena: std.mem.Allocator, plan: ThreadPlan) Allocator.Error!void {
     switch (build_options.io_mode) {
         .threaded => {
-            // We want a maximum of n total threads to keep the InternPool happy, but
-            // the main thread doesn't count towards the limits, so use n-1. Also, the
-            // linker can run concurrently, so we need to set both the async *and* the
-            // concurrency limit.
-            const limit: Io.Limit = .limited(n - 1);
+            // The main thread doesn't count towards the limits, so use workers-1. Also,
+            // the linker can run concurrently, so we need to set both the async *and*
+            // the concurrency limit.
+            const limit: Io.Limit = .limited(plan.workers - 1);
             io_impl_ptr.setAsyncLimit(limit);
             io_impl_ptr.concurrent_limit = limit;
         },
         .evented => {},
     }
-    try Zcu.PerThread.Id.allocate(arena, @max(n, 2));
+    // `plan.partitions` already carries `InternPool.init`'s `@max(_, 2)` floor
+    // (`InternPool.zig:6295`), applied where it can be reported rather than here where
+    // it could not be.
+    try Zcu.PerThread.Id.allocate(arena, plan.partitions);
 }
 
 fn randInt(io: Io, comptime T: type) T {

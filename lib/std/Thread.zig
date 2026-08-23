@@ -294,6 +294,13 @@ pub fn getCpuCount() CpuCountError!usize {
     return try Impl.getCpuCount();
 }
 
+/// CPU topology: physical cores and SMT siblings, intersected with this process's
+/// affinity mask. `getCpuCount` above answers "how many logical CPUs may we use" —
+/// the right input for wide, I/O-tolerant fan-out and the wrong input for cache-heavy
+/// work, since SMT siblings share L1, L2 and execution ports. `Topology.detect` answers
+/// the other half, and reports UNKNOWN rather than guessing where it cannot measure.
+pub const Topology = @import("Thread/Topology.zig");
+
 /// Configuration options for hints on how to spawn threads.
 pub const SpawnConfig = struct {
     // TODO compile-time call graph analysis to determine stack upper bound
