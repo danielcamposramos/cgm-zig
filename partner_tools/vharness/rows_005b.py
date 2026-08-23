@@ -54,36 +54,58 @@ def v2(ctx):
     return Verdict("V2", GREEN if ok else RED, ev, "1 of 1 runs", {"report": rep, "rc": r.rc})
 
 
-@vlib.row("V2-EXP", "005b", "the -j1 row's OWN stated expectation (K = 2, 536,870,911)",
-          "report line vs the V-list's written numbers")
+@vlib.row("V2-EXP", "005b", "-j1 changes WORKERS ONLY -- the decoupling, pinned",
+          "report line with -j1 vs the same host with no -j at all")
 def v2_exp(ctx):
     """Split out from V2 because behaviour and expectation gave different answers.
 
-    The V-list expects `-j1` to force `intern partitions 2`. `ThreadPlan.derive`
-    takes `partitions` solely from `partitions_arg orelse topology`; `n_jobs`
-    never touches it. Keeping this as a separate row means V2 can be GREEN
-    without laundering a RED expectation into it.
+    HISTORY, kept because the correction is the finding. This row was written to check
+    the V-list's stated expectation that `-j1` forces `intern partitions 2` and
+    `536,870,911` items. It measured `partitions 8` instead, and the SHIPPED CODE WAS
+    RIGHT: `ThreadPlan.derive` takes `partitions` from `partitions_arg orelse topology`
+    and `n_jobs` never touches it. The expectation came from dossier 3.8's flag table,
+    written before the (K, M_wide) split and carrying the pre-split world where one
+    integer meant both quantities. The dossier, the V-list and this row were corrected
+    to match the code; the superseded numbers stay quoted below so a reader of an old
+    log can tell a version difference from a defect.
+
+    WHAT IT PINS NOW is the property, not a constant, so it is host-independent: `-j1`
+    sets workers to 1 and leaves the partition count exactly where the same host derives
+    it with no `-j` at all. If `-j` ever starts moving K again, the decoupling this whole
+    patch exists for has regressed, and this row goes red.
     """
     fx = ctx.fixtures.get("hello")
-    r = run_cmd([ctx.zig, "build-exe", "-j1", "-fno-emit-bin", "-Mroot=hello.zig"],
-                cwd=fx["dir"], env=ctx.env_zig, mask=ctx.mask, timeout=300)
-    rep = vlib.parse_report_line(r.stderr)
-    if rep is None:
-        return unknown("V2-EXP", f"no report line to check (rc={r.rc})", "0 of 3 expectations checkable")
+    base = ["build-exe", "-fno-emit-bin", "-Mroot=hello.zig"]
+    r_j1 = run_cmd([ctx.zig] + base + ["-j1"], cwd=fx["dir"], env=ctx.env_zig,
+                   mask=ctx.mask, timeout=300)
+    r_free = run_cmd([ctx.zig] + base, cwd=fx["dir"], env=ctx.env_zig,
+                     mask=ctx.mask, timeout=300)
+    rep_j1 = vlib.parse_report_line(r_j1.stderr)
+    rep_free = vlib.parse_report_line(r_free.stderr)
+    if rep_j1 is None or rep_free is None:
+        return unknown("V2-EXP",
+                       f"no report line to compare (rc {r_j1.rc}/{r_free.rc})",
+                       "0 of 3 expectations checkable")
     checks = {
-        "workers == 1": rep["workers"] == 1,
-        "intern partitions == 2": rep["partitions"] == 2,
-        "items == 536,870,911": rep["items"] == 536_870_911,
+        "-j1 sets workers to 1": rep_j1["workers"] == 1,
+        "-j1 leaves K where the host derived it":
+            rep_j1["partitions"] == rep_free["partitions"],
+        "-j1 leaves the item ceiling untouched":
+            rep_j1["items"] == rep_free["items"],
     }
     good = sum(1 for v in checks.values() if v)
-    ev = (f"measured workers {rep['workers']}, intern partitions {rep['partitions']}, "
-          f"{rep['items']:,} items — the V-list expects 1 / 2 / 536,870,911. "
-          + ("agrees" if good == 3 else
-             "the row's expectation is contradicted by the shipped code: -j1 does not set K=2 "
-             "(ThreadPlan.derive takes partitions from partitions_arg orelse topology). "
-             "Harmless in effect, but list, dossier and code disagree and the code is right."))
+    ev = (f"-j1 -> workers {rep_j1['workers']}, partitions {rep_j1['partitions']}, "
+          f"{rep_j1['items']:,} items; no -j -> workers {rep_free['workers']}, "
+          f"partitions {rep_free['partitions']}, {rep_free['items']:,} items. "
+          + ("-j1 moved workers and left K alone: the decoupling holds."
+             if good == 3 else
+             "-j1 MOVED THE PARTITION COUNT -- the (K, M_wide) decoupling has regressed.")
+          + " SUPERSEDED EXPECTATION, quoted for old logs: the V-list originally demanded "
+            "workers 1 / partitions 2 / 536,870,911 items. That was wrong -- it predated "
+            "the split -- and the dossier 3.8 correction records it.")
     return Verdict("V2-EXP", GREEN if good == 3 else RED, ev,
-                   f"{good} of 3 stated expectations", {"report": rep, "checks": checks})
+                   f"{good} of 3 properties", {"j1": rep_j1, "free": rep_free,
+                                               "checks": checks})
 
 
 # ---------------------------------------------------------------------- V3 --
