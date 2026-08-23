@@ -59,6 +59,25 @@ const fatal = std.process.fatal;
 /// `.ignore_unknown_fields = true` and only declare what we use. `index`, `root`, and
 /// `root_src_path` on `ModuleDoc`, and `dep_index` on `DepDoc`, are rung-2-only fields --
 /// rung 1 only ever reads `deps[].import_name` and `roots[].role`.
+///
+/// Every rung-2-only field is `?T = null`, never a bare required field. Review finding
+/// BLOCKER 2 measured why: `std.json`'s decoder raises `error.MissingField` for a declared
+/// field that a document omits, so declaring rung 2's fields as required made *rung 1's
+/// own flagless `--module-graph` run* hard-fail on documents rung 1 had previously
+/// accepted -- an additive flag silently breaking the rung below it, the exact opposite of
+/// `docs/crown/PLAN.md`'s "Design constraints" #2 (off by default, strict superset).
+/// Measured on the promoted 0.16.0 compiler: `parseFromSliceLeaky(struct { a: usize }, "{}")`
+/// -> `error.MissingField`; with `a: usize = 7` -> parses. Defaulting instead means an old
+/// or hand-written document still loads for rung 1, and `--check-decls` refuses it *by
+/// name* (`requireRung2Fields` below) instead of dying in the JSON decoder with a message
+/// that names neither the flag nor the field (doctrine 2).
+///
+/// The cost of the default, stated: for `index`/`root`/`root_src_path`, an explicit JSON
+/// `null` is now indistinguishable from an absent field. Stage 0 always emits all three as
+/// non-null, so the two cases only ever co-occur on a malformed document, and
+/// `requireRung2Fields`'s wording says "missing or null" rather than claiming to know
+/// which. `dep_index` is the one field where `null` is stage 0's own meaningful value
+/// ("dependency module not found in `module_roots`"), and there it keeps that meaning.
 const GraphDoc = struct {
     modules: []const ModuleDoc,
     roots: []const RootDoc,
@@ -67,20 +86,22 @@ const ModuleDoc = struct {
     /// Stage 0's `ModuleNode.index` -- rung 2 resolves a `DepDoc.dep_index` back to a
     /// concrete module by searching for this field rather than assuming JSON array
     /// position equals index (doctrine 2: verify, don't assume).
-    index: usize,
+    index: ?usize = null,
     /// Rendered module-root directory (`EmitModuleGraph.zig`'s `ModuleNode.root`,
     /// `Compilation.Path.fmt`-formatted -- already a filesystem-openable path, absolute or
     /// cwd-relative). Joined with `root_src_path` to locate the module's root file.
-    root: []const u8,
-    root_src_path: []const u8,
+    root: ?[]const u8 = null,
+    root_src_path: ?[]const u8 = null,
     deps: []const DepDoc,
 };
 const DepDoc = struct {
     import_name: []const u8,
     /// Index into `GraphDoc.modules[].index`, or null if stage 0 could not resolve the
     /// dependency module (see `EmitModuleGraph.zig`'s `DepEdge.dep_index` doc comment).
-    /// Rung 1 does not read this field.
-    dep_index: ?usize,
+    /// Rung 1 does not read this field. Defaulted for the reason `GraphDoc`'s doc comment
+    /// gives; here the default coincides with stage 0's own "unresolved" value, so an
+    /// absent field degrades into exactly the `target_unresolvable` bucket a null one does.
+    dep_index: ?usize = null,
 };
 const RootDoc = struct {
     role: []const u8,
@@ -139,6 +160,18 @@ pub fn checkAgainstGraph(
     check_decls: bool,
 ) !void {
     const graph = loadGraph(arena, io, graph_path);
+
+    // Rung 2's schema requirement, checked BEFORE any work, and only when rung 2 was asked
+    // for (review finding BLOCKER 2): rung 1 must keep loading documents that predate these
+    // fields, so they are optional in `ModuleDoc` and their absence is refused here, by
+    // name, naming the flag and the field -- never by `error.MissingField` out of the JSON
+    // decoder, which would have named neither and would have fired on rung-1-only runs too.
+    if (check_decls) {
+        if (try rung2FieldGap(arena, graph)) |gap| fatal(
+            "module graph '{s}' cannot satisfy --check-decls: {s}. Re-emit the graph with a compiler that includes Crown stage 0 (-femit-module-graph emits index/root/root_src_path on every module), or drop --check-decls to run the rung-1 import check alone",
+            .{ graph_path, gap },
+        );
+    }
 
     // The union of every declared import-edge name in the graph, plus the root roles
     // (`std`, and on test builds `main`, plus the `compiler_rt`/`ubsan_rt`/`zigc` runtime
@@ -343,6 +376,36 @@ fn loadGraph(arena: Allocator, io: Io, graph_path: []const u8) GraphDoc {
 // declaration" does not apply to it.
 // ===========================================================================================
 
+/// Rung 2's schema gate (review finding BLOCKER 2). Returns `null` when every module node
+/// carries the three rung-2-only fields, or an already-formatted description of the *first*
+/// gap otherwise -- naming the module by whatever identity the document still offers and the
+/// exact field that is missing, so the operator is told what to re-emit rather than being
+/// handed `error.MissingField` from a JSON decoder.
+///
+/// Deliberately first-gap-only, not a census: this is a refusal, not a report. A document
+/// missing one of these fields on one node is a document from the wrong emitter, and naming
+/// every node would bury the one fact that matters. `checkDeclExistence`'s `.?` unwraps of
+/// these three fields are sound exactly because this ran first and `fatal`'d otherwise --
+/// the unwraps are guarded by control flow, not by assumption (doctrine 2).
+fn rung2FieldGap(arena: Allocator, graph: GraphDoc) Allocator.Error!?[]const u8 {
+    for (graph.modules, 0..) |m, i| {
+        const missing: []const u8 = if (m.index == null)
+            "index"
+        else if (m.root == null)
+            "root"
+        else if (m.root_src_path == null)
+            "root_src_path"
+        else
+            continue;
+        return try std.fmt.allocPrint(
+            arena,
+            "module at array position {d} has no '{s}' field (missing, or present as JSON null) -- --check-decls resolves a named import to a concrete file through index/root/root_src_path and cannot do so without it",
+            .{ i, missing },
+        );
+    }
+    return null;
+}
+
 /// Target module/file identified for a named import: the graph's `ModuleNode.root` and
 /// `root_src_path`, joined to locate the module's root source file on disk.
 const ModuleTarget = struct {
@@ -403,15 +466,19 @@ fn checkDeclExistence(
     // per-module) cannot be honestly resolved to one file here, so it collapses to `null`
     // -- reported at use as `target_unresolvable` rather than picking one target
     // arbitrarily.
+    //
+    // The `.?` unwraps below are guarded, not assumed: `checkAgainstGraph` ran
+    // `rung2FieldGap` over this exact document before calling us and `fatal`'d by name if
+    // any of the three were absent (review finding BLOCKER 2).
     var module_by_index: std.AutoHashMapUnmanaged(usize, ModuleDoc) = .empty;
-    for (graph.modules) |m| try module_by_index.put(arena, m.index, m);
+    for (graph.modules) |m| try module_by_index.put(arena, m.index.?, m);
 
     var named_targets: std.StringHashMapUnmanaged(?ModuleTarget) = .empty;
     for (graph.modules) |m| {
         for (m.deps) |d| {
             const target: ?ModuleTarget = if (d.dep_index) |di| dep_blk: {
                 const dep_mod = module_by_index.get(di) orelse break :dep_blk null;
-                break :dep_blk ModuleTarget{ .root = dep_mod.root, .root_src_path = dep_mod.root_src_path };
+                break :dep_blk ModuleTarget{ .root = dep_mod.root.?, .root_src_path = dep_mod.root_src_path.? };
             } else null;
             const gop = try named_targets.getOrPut(arena, d.import_name);
             if (!gop.found_existing) {
