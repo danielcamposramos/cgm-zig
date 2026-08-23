@@ -106,6 +106,21 @@ pub const Stats = struct {
     named_imports: usize = 0,
     exempt: usize = 0,
     skipped_nonliteral: usize = 0,
+    /// Rung 4, review finding V4: a file-import site whose containment in the bound
+    /// module's root could not be DETERMINED -- distinct from one determined to be outside
+    /// (that is an error and stays in `file_imports`, because it was checked) and distinct
+    /// from one checked clean. It was previously folded into `file_imports` and therefore
+    /// into the summary's "validated" figure, which claimed a check that had not happened.
+    ///
+    /// Always zero without `--as-module`, so rung 1's and rung 3's own runs are unaffected;
+    /// defaulted so the `--json` `import_stats` object gains the field additively.
+    sandbox_unresolvable: usize = 0,
+
+    /// Every `@import` site walked lands in exactly one field above; this is the
+    /// denominator `printSummary` prints, computed from them so the two cannot drift.
+    pub fn total(s: Stats) usize {
+        return s.file_imports + s.named_imports + s.exempt + s.skipped_nonliteral + s.sandbox_unresolvable;
+    }
 };
 
 /// The graph-derived lookup table `collectGraphViolations` checks names against. Split out
@@ -375,13 +390,37 @@ const SandboxOutcome = union(enum) {
     unresolvable: []const u8,
 };
 
-/// Prefix-compares `resolved` (the file-import path already joined against the checked
-/// file's own directory, exactly as rung 1 computed it for the existence check) against
-/// `binding.root_abs`, after making `resolved` itself absolute and lexically normalized the
-/// same way `resolveAsModule` normalized `root_abs`. Lexical only -- like `resolveAsModule`,
-/// this does not follow symlinks (`std.fs.path.resolve`'s own documented limitation), which
-/// is the same honest scope the plan's "std.fs.path resolution + prefix comparison on
-/// normalized paths" instruction calls for.
+/// Resolves one `@import` file operand to the path both the existence check and the
+/// sandbox check must agree on. THE one place that resolution happens (review finding
+/// REJECT 1); the two consumers reading different paths is precisely how an absolute
+/// operand walked out of the sandbox unnoticed.
+///
+/// `std.fs.path.join` does NOT reset on an absolute component -- measured on the promoted
+/// 0.16.0 compiler:
+///
+///     join("/proj/root/sub", "/etc/passwd.zig") == "/proj/root/sub/etc/passwd.zig"
+///
+/// so `@import("/etc/passwd.zig")` from a file in the module was being resolved to a path
+/// *inside* the module and passed the sandbox clean. The compiler's own resolution does
+/// reset: `discoverImport` -> `Compilation.Path.upJoin` -> `introspect.resolvePath` ->
+/// `std.fs.path.resolve`. This function restores that behavior at the one seam that feeds
+/// both checks, exactly as the review prescribed.
+fn resolveImportPath(arena: Allocator, checked_dir: []const u8, import_path: []const u8) Allocator.Error![]const u8 {
+    if (std.fs.path.isAbsolute(import_path)) return import_path;
+    return std.fs.path.join(arena, &.{ checked_dir, import_path });
+}
+
+/// Prefix-compares `resolved` (the file-import path from `resolveImportPath`, the same
+/// value the existence check consumed) against `binding.root_abs`, after making `resolved`
+/// itself absolute and lexically normalized the same way `resolveAsModule` normalized
+/// `root_abs`. Lexical only -- like `resolveAsModule`, this does not follow symlinks
+/// (`std.fs.path.resolve`'s own documented limitation), which is the same honest scope the
+/// plan's "std.fs.path resolution + prefix comparison on normalized paths" instruction
+/// calls for.
+///
+/// Every path out of here that is not `.inside` says WHICH question failed: "we checked and
+/// it escaped" and "we could not tell" are different facts and must not read alike
+/// (doctrine 2).
 fn sandboxCheck(arena: Allocator, binding: ModuleBinding, resolved: []const u8) Allocator.Error!SandboxOutcome {
     const abs = if (std.fs.path.isAbsolute(resolved))
         try std.fs.path.resolve(arena, &.{resolved})
@@ -390,19 +429,77 @@ fn sandboxCheck(arena: Allocator, binding: ModuleBinding, resolved: []const u8) 
     else
         return .{ .unresolvable = "the checked file's own path is relative and the current working directory could not be resolved to make its import path absolute for comparison against the module root" };
 
-    if (pathIsWithinRoot(abs, binding.root_abs)) return .inside;
-    return .{ .outside = abs };
+    return switch (pathIsWithinRoot(abs, binding.root_abs)) {
+        .inside => .inside,
+        .outside => .{ .outside = abs },
+        // Measured, not hypothetical: `std.fs.path.resolve(arena, &.{ "", "sub/x.zig" })`
+        // returns "sub/x.zig" -- still relative. So an empty `cwd_abs` (the WASI class:
+        // `introspect.getResolvedCwd` returns "" there by contract) leaves `abs` relative,
+        // and a lexical prefix comparison between a relative path and a root cannot mean
+        // containment. Say so, rather than return whichever verdict the bytes happen to
+        // produce.
+        .undecidable => .{ .unresolvable = try std.fmt.allocPrint(
+            arena,
+            "containment is undecidable by lexical comparison: the import resolved to '{s}' and the module root is '{s}', and a prefix comparison only means containment when BOTH are absolute paths (an empty or relative value on either side is the WASI/unresolved-cwd class)",
+            .{ abs, binding.root_abs },
+        ) },
+    };
 }
 
-/// True iff `child_abs` names a path lexically inside the directory `root_abs` -- not equal
+/// Small formatting helper for the V6 membership diagnostic: the absolute path when we
+/// managed to compute one, else the path as the operator wrote it. Never a placeholder that
+/// looks like a real path.
+fn fa_or(abs: ?[]const u8, fallback: []const u8) []const u8 {
+    return abs orelse fallback;
+}
+
+/// Three-valued on purpose (review finding V5): `undecidable` is not `outside`. A boolean
+/// here forced every "we cannot tell" into a verdict, and both directions were wrong in
+/// practice -- an empty root made every absolute child look inside, and a root of "/" made
+/// every child look outside.
+const WithinRoot = enum { inside, outside, undecidable };
+
+/// Whether `child_abs` names a path lexically inside the directory `root_abs` -- not equal
 /// to it (a directory is not "inside" itself) and not merely string-prefixed by it (e.g.
 /// `/root-extra` must not count as inside `/root`): the byte after the shared prefix must
-/// be a path separator. Both arguments are assumed already absolute and normalized (no
-/// trailing separator, no `.`/`..` components) by their respective callers.
-fn pathIsWithinRoot(child_abs: []const u8, root_abs: []const u8) bool {
-    if (!mem.startsWith(u8, child_abs, root_abs)) return false;
-    if (child_abs.len == root_abs.len) return false;
-    return child_abs[root_abs.len] == std.fs.path.sep;
+/// be a path separator.
+///
+/// The head commit assumed both arguments were "already absolute and normalized ... by
+/// their respective callers" and returned a bool. Review finding V5 measured two boundary
+/// classes where that assumption does not hold and the bool therefore lied:
+///
+///   * root normalizes to bare "/" (reachable: `std.fs.path.resolve(&.{"/a/.."})` == "/").
+///     Then the byte after the shared prefix is the first byte of the child's own first
+///     component, never a separator, so EVERY child was reported outside -- a false
+///     violation on every import in such a module.
+///   * root is "" (the WASI class -- `introspect.getResolvedCwd` returns "" there). Then
+///     `startsWith` is vacuously true and `child_abs[0]` is the leading separator, so
+///     EVERY absolute child was reported inside -- a false pass, the worse direction.
+///
+/// So the assumption is now checked instead of assumed, and the unmet case has its own
+/// answer.
+fn pathIsWithinRoot(child_abs: []const u8, root_abs: []const u8) WithinRoot {
+    const sep = std.fs.path.sep;
+    // A lexical prefix comparison means containment only between two absolute paths.
+    // Anything else -- empty, relative -- is undecidable here, not a verdict.
+    if (!std.fs.path.isAbsolute(root_abs)) return .undecidable;
+    if (!std.fs.path.isAbsolute(child_abs)) return .undecidable;
+
+    // Tolerate a trailing separator on the root rather than trusting a caller to have
+    // stripped it; "/proj/root/" and "/proj/root" name the same directory.
+    const root = if (root_abs.len > 1 and root_abs[root_abs.len - 1] == sep)
+        root_abs[0 .. root_abs.len - 1]
+    else
+        root_abs;
+
+    // The filesystem root is the one directory whose children are not separated from it by
+    // an extra separator: "/" + "x" is "/x", not "//x". Every absolute path except "/"
+    // itself is inside it.
+    if (root.len == 1) return if (child_abs.len > 1) .inside else .outside;
+
+    if (!mem.startsWith(u8, child_abs, root)) return .outside;
+    if (child_abs.len == root.len) return .outside;
+    return if (child_abs[root.len] == sep) .inside else .outside;
 }
 
 /// Walks every `@import` site in `tree` and validates it against `loaded`, recording any
@@ -473,28 +570,38 @@ pub fn collectGraphViolations(
         // else is a named module. Diverging from that rule here produced a hard false
         // positive on legal @import("x.zon") in review -- keep the two in lockstep.
         if (mem.endsWith(u8, import_path, ".zig") or mem.endsWith(u8, import_path, ".zon")) {
-            stats.file_imports += 1;
-            const resolved = try std.fs.path.join(arena, &.{ checked_dir, import_path });
+            // ONE resolution, consumed by both the existence check and the sandbox check
+            // (review finding REJECT 1). `resolveImportPath` -- not a bare `join` -- so an
+            // absolute operand resets the path instead of being appended to the checked
+            // file's directory.
+            const resolved = try resolveImportPath(arena, checked_dir, import_path);
             const exists = if (Io.Dir.cwd().access(io, resolved, .{})) |_| true else |_| false;
             if (!exists) {
+                stats.file_imports += 1;
                 had_error = true;
                 try addImportError(wip_errors, tree, display_path, operand, "@import of relative file that does not exist on disk: '{s}' (resolved path: '{s}')", .{ import_path, resolved });
             } else if (binding) |b| {
-                // Rung 4 sandbox check (`Package/Module.zig`'s own contract: "Only files
-                // inside this directory can be imported"), gated on `exists` above so a
-                // nonexistent import gets exactly one error, not two, on the same site.
+                // Rung 4 sandbox check, gated on `exists` above so a nonexistent import
+                // gets exactly one error, not two, on the same site. This is a strictness
+                // this fork CHOOSES; the compiler does not enforce it -- see the
+                // `sandbox_unresolvable` doc comment on `Stats` and the error text below.
                 switch (try sandboxCheck(arena, b, resolved)) {
-                    .inside => {},
+                    .inside => stats.file_imports += 1,
                     .outside => |abs| {
+                        stats.file_imports += 1;
                         had_error = true;
-                        try addImportError(wip_errors, tree, display_path, operand, "@import escapes module '{s}''s sandboxed root: '{s}' resolves to '{s}', which lies outside '{s}' (Package/Module.zig's own contract: \"Only files inside this directory can be imported\")", .{ b.fully_qualified_name, import_path, abs, b.root_abs });
+                        try addImportError(wip_errors, tree, display_path, operand, "@import leaves module '{s}''s root directory: '{s}' resolves to '{s}', which lies outside '{s}'. This is a strictness --as-module CHOOSES, not a compiler rule: today the compiler enforces no @import sandbox at all (only @embedFile refuses an outside-package path, Sema.zig:13063 via Zcu/PerThread.zig:2881), so this code may well build. Package/Module.zig:3 states the intended contract (\"Only files inside this directory can be imported\") and --as-module checks it before a build", .{ b.fully_qualified_name, import_path, abs, b.root_abs });
                     },
                     .unresolvable => |reason| {
+                        // Its OWN counted category (review finding V4): folding a site we
+                        // could not check into `validated` claimed a check that did not
+                        // happen. An absent instrument reports UNKNOWN, never a verdict.
+                        stats.sandbox_unresolvable += 1;
                         had_error = true;
                         try addImportError(wip_errors, tree, display_path, operand, "@import '{s}' could not be sandbox-checked against module '{s}': {s}", .{ import_path, b.fully_qualified_name, reason });
                     },
                 }
-            }
+            } else stats.file_imports += 1;
         } else if (mem.eql(u8, import_path, "std") or mem.eql(u8, import_path, "builtin") or mem.eql(u8, import_path, "root")) {
             // Special-cased shortcuts: never present in `Package.Module.deps` (see
             // `EmitModuleGraph.zig`'s `DepEdge` doc comment), so there is nothing in the
