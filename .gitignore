@@ -5,3 +5,7 @@ build/
 build-*/
 *.o
 *.a
+# partner_tools is Python; its bytecode cache is not a deliverable and has twice
+# shown up as untracked noise in a `git status` a lane had to read carefully.
+__pycache__/
+*.pyc
