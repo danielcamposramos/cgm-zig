@@ -4136,6 +4136,13 @@ pub const Index = enum(u32) {
             // executed, here). It converts the ceiling from silent memory corruption
             // into a named refusal that survives release builds and reports the numbers
             // needed to size a real fix.
+            //
+            // patch/005 update: the ceiling is still 30 bits, but WHAT SPLITS IT changed.
+            // The partition count no longer follows `-j`; it derives from physical cores,
+            // rounded up to a power of two (`src/ThreadPlan.zig`), which on a 6c/12t host
+            // moves this limit from 67,108,863 to 134,217,727. The remedy sentence below
+            // was updated with it -- a remedy that names a flag which no longer does the
+            // job is worse than no remedy at all.
             const index_mask = ip.getIndexMask(u30);
             if (unwrapped.index > index_mask) {
                 @branchHint(.cold);
@@ -4145,8 +4152,11 @@ pub const Index = enum(u32) {
                         "(CaptureValue.idx is u30) and is split {d} ways ({d} bits) across " ++
                         "compiler threads, so a wider host gets a SMALLER per-thread limit; " ++
                         "comptime analysis of one unit is serial, so it all lands in a single " ++
-                        "partition. Lower `-j` to widen each partition (`-j2` gives {d} items " ++
-                        "per thread), or split this compilation unit.",
+                        "partition. Lower `--intern-partitions` to widen each partition " ++
+                        "(`--intern-partitions=2` gives {d} items per partition), or split " ++
+                        "this compilation unit. NOTE: `-j` no longer moves this number -- it " ++
+                        "sets the worker count, and the partition count now derives from " ++
+                        "PHYSICAL cores. The startup line beginning \"threads:\" reports both.",
                     .{
                         @intFromEnum(unwrapped.tid),
                         unwrapped.index,

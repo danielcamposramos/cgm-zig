@@ -50,6 +50,9 @@ pub const Id = if (InternPool.single_threaded) enum {
         _ = arena;
         _ = n;
     }
+    pub fn poolLen() usize {
+        return 1;
+    }
     pub fn acquire(io: std.Io) Id {
         _ = io;
         return .main;
@@ -68,6 +71,28 @@ pub const Id = if (InternPool.single_threaded) enum {
     /// to `std.Io.Threaded` for asynchronous/concurrent work. The eventual solution
     /// will likely involve significant changes to the `InternPool` implementation.
     var available_tids: std.ArrayList(Id) = .empty;
+    /// Highest issuable tid, plus one — i.e. the `n` this pool was allocated with.
+    ///
+    /// This pool is PROCESS-GLOBAL: it is a namespace-scope `var` on the enum, not a
+    /// field of any `Compilation`. A tid it issues is used as a direct index into
+    /// whichever `InternPool` is active (`getLocal`, `InternPool.zig:1446-1448`), and a
+    /// single process routinely has many `InternPool`s alive at once — every prelink
+    /// sub-compilation builds its own. Therefore **every pool alive in the process must
+    /// have `locals.len >= poolLen()`**, or a perfectly ordinary tid indexes past the
+    /// end of a smaller pool: a wild pointer of exactly the class patch/001 exists to
+    /// abolish.
+    ///
+    /// Exposed so that `Compilation.CreateOptions.intern_partitions` can *default* to
+    /// it. That default is the whole mitigation for dossier risk R1, and it is a default
+    /// rather than a forwarded field because the forwarding checklist is longer than the
+    /// dossier believed: `grep -rn '\.thread_limit = comp.thread_limit' src/` finds
+    /// TWELVE sub-compilation construction sites, not three
+    /// (`Compilation.zig:5066`, `:7508`, `:7646`, plus `src/libs/`'s libunwind, musl,
+    /// netbsd, openbsd, glibc, freebsd, libcxx x2 and libtsan). An invariant that depends
+    /// on twelve call sites remembering to forward a field is not an invariant.
+    ///
+    /// Starts at 1 because `.main` exists before `allocate` is ever called.
+    var pool_len: usize = 1;
     threadlocal var recursive_depth: usize = 0;
     threadlocal var recursive_tid: Id = undefined;
 
@@ -75,6 +100,7 @@ pub const Id = if (InternPool.single_threaded) enum {
         assert(available_tids.items.len == 0);
         try available_tids.ensureTotalCapacityPrecise(arena, n - 1);
         for (1..n) |tid| available_tids.appendAssumeCapacity(@enumFromInt(tid));
+        pool_len = n;
         switch (build_options.io_mode) {
             .threaded => {
                 // Called from the main thread, so mark ourselves as such.
@@ -83,6 +109,9 @@ pub const Id = if (InternPool.single_threaded) enum {
             },
             .evented => {},
         }
+    }
+    pub fn poolLen() usize {
+        return pool_len;
     }
     pub fn acquire(io: std.Io) Id {
         switch (build_options.io_mode) {
@@ -245,7 +274,7 @@ pub fn update(
                 result catch |err| switch (err) {
                     error.OutOfMemory => |e| return e,
                     else => {
-                        try pt.reportRetryableFileError(file_index, "unable to update cache: {s}", .{@errorName(err)});
+                        try reportRetryableFileError(zcu, file_index, "unable to update cache: {s}", .{@errorName(err)});
                         continue;
                     },
                 };
@@ -360,6 +389,48 @@ fn workerUpdateBuiltinFile(comp: *Compilation, file: *Zcu.File) void {
         .{ file.path.fmt(comp), @errorName(err) },
     );
 }
+/// THE LANE SPLIT (`PATCH005_DOSSIER.md` §1.3 and §2.3, edit 4).
+///
+/// This worker used to hold a thread id for its entire body. It no longer does, and that
+/// is the single largest practical consequence of the topology work: AstGen is the widest
+/// phase in the compiler, and nearly all of it does not allocate into the `InternPool` at
+/// all.
+///
+/// The body — read the source, parse, run AstGen, write the ZIR cache entry — reaches no
+/// `InternPool` entry point taking a `tid`. That is now enforced by the type system
+/// rather than asserted in a comment: `updateFile`, `lockAndClearFileCompileError` and
+/// `reportRetryableFileError` take a `*Zcu`, not a `Zcu.PerThread`, so there is no `tid`
+/// in scope for them or for anything they call to pass along. If a future edit makes any
+/// of that work reach an allocating entry point, it fails to compile instead of quietly
+/// corrupting a partition.
+///
+/// The tail — import discovery — does allocate: `pt.discoverImport` reaches
+/// `intern_pool.createFile(gpa, io, pt.tid, ...)` (`:2408`), once per NEWLY DISCOVERED
+/// file rather than once per import. So the tid is acquired here, around the tail only.
+///
+/// Two things deliberately NOT done here, each with its reason:
+///
+///  * **No admission-gate permit.** `PATCH005_DOSSIER.md` §2.3 edit 4 says this worker
+///    should take "its permit + tid" around the tail. It must not: the tail spawns more
+///    of these workers (`group.async` inside the import loop below), so a permit held
+///    across that spawn deadlocks the moment every permit is held by a worker whose
+///    inline-run child is waiting for one — self-deadlock even at `M_alloc = 1`. The tid
+///    semaphore is safe here precisely because `Id.acquire` has a threadlocal recursion
+///    shortcut (`:113-121`) that a plain counting semaphore does not. Dossier edit 3
+///    lists only A2 and A6 as gated sites, and edit 3 is the one that is right.
+///  * **No removal of the recursion shortcut.** When `io.async` runs past its limit it
+///    runs the task INLINE on the caller (`Io/Threaded.zig:2100-2105`), so an inline
+///    child re-enters `acquire` on a thread that already holds a tid. The shortcut is
+///    what keeps that from deadlocking, and it is why overflow work still lands on the
+///    caller's partition. Raising `async_limit` from `K-1` to `M_wide-1` makes that
+///    overflow strictly RARER than stock; it does not abolish it. Named, not fixed.
+///
+/// **This hunk is read- and type-verified, not run.** It is the one change in patch/005
+/// that could introduce a data race, and queued item V12 is its HARD GATE: a ReleaseSafe
+/// five-run digest comparison plus a ThreadSanitizer run over a mid-size closure, with a
+/// sabotage-and-watch-it-go-red control on the instrument itself. Until V12 fires this
+/// split is UNVERIFIED, and if V12 goes red the remedy is to move the `.acquire` back to
+/// the top of the function and forfeit the wide-lane win rather than risk it.
 fn workerUpdateFile(
     comp: *Compilation,
     file: *Zcu.File,
@@ -368,16 +439,14 @@ fn workerUpdateFile(
     group: *Io.Group,
 ) void {
     const io = comp.io;
-    const tid: Zcu.PerThread.Id = .acquire(io);
-    defer tid.release(io);
+    const zcu = comp.zcu.?;
 
     const child_prog_node = prog_node.start(std.fs.path.basename(file.path.sub_path), 0);
     defer child_prog_node.end();
 
-    const pt: Zcu.PerThread = .activate(comp.zcu.?, tid);
-    defer pt.deactivate();
-    pt.updateFile(file_index, file) catch |err| {
-        pt.reportRetryableFileError(file_index, "unable to load '{s}': {s}", .{ std.fs.path.basename(file.path.sub_path), @errorName(err) }) catch |oom| switch (oom) {
+    // --- WIDE LANE: no tid held. Runs on any of `M_wide` workers. ---
+    updateFile(zcu, file_index, file) catch |err| {
+        reportRetryableFileError(zcu, file_index, "unable to load '{s}': {s}", .{ std.fs.path.basename(file.path.sub_path), @errorName(err) }) catch |oom| switch (oom) {
             error.OutOfMemory => {
                 comp.mutex.lockUncancelable(io);
                 defer comp.mutex.unlock(io);
@@ -397,6 +466,12 @@ fn workerUpdateFile(
     // AstGen jobs.
     const imports_index = file.zir.?.extra[@intFromEnum(Zir.ExtraIndex.imports)];
     if (imports_index != 0) {
+        // --- ALLOCATING LANE: the tid is held only for what follows. ---
+        const tid: Zcu.PerThread.Id = .acquire(io);
+        defer tid.release(io);
+        const pt: Zcu.PerThread = .activate(zcu, tid);
+        defer pt.deactivate();
+
         const extra = file.zir.?.extraData(Zir.Inst.Imports, imports_index);
         var import_i: u32 = 0;
         var extra_index = extra.end;
@@ -480,8 +555,18 @@ pub fn destroyFile(pt: Zcu.PerThread, file_index: Zcu.File.Index) void {
 /// Ensures that `file` has up-to-date ZIR. If not, loads the ZIR cache or runs
 /// AstGen as needed. Also updates `file.status`. Does not assume that `file.mod`
 /// is populated. Does not return `error.AnalysisFail` on AstGen failures.
+/// Reads, parses, lowers to ZIR and caches one source file.
+///
+/// **Takes a `*Zcu`, not a `Zcu.PerThread`, and that is the point.** This is the widest
+/// phase in the compiler and it reaches no `InternPool` entry point taking a `tid`; the
+/// missing parameter is what proves it. `PerThread.zig`'s own header states the rule this
+/// signature enforces — "Any operation which mutates `InternPool` state lives here rather
+/// than on `Zcu`" — so needing a `pt` IS the allocation marker, and not needing one is a
+/// compile-time claim that nothing below allocates into a partition.
+///
+/// See `workerUpdateFile` for the lane split this enables and for what it does not prove.
 pub fn updateFile(
-    pt: Zcu.PerThread,
+    zcu: *Zcu,
     file_index: Zcu.File.Index,
     file: *Zcu.File,
 ) !void {
@@ -490,7 +575,6 @@ pub fn updateFile(
     const tracy_trace = trace(@src());
     defer tracy_trace.end();
 
-    const zcu = pt.zcu;
     const comp = zcu.comp;
     const gpa = zcu.gpa;
     const io = comp.io;
@@ -549,7 +633,7 @@ pub fn updateFile(
     };
 
     // The old compile error, if any, is no longer relevant.
-    pt.lockAndClearFileCompileError(file_index, file);
+    lockAndClearFileCompileError(zcu, file_index, file);
 
     // If `zir` is not null, and `prev_zir` is null, then `TrackedInst`s are associated with `zir`.
     // We need to keep it around!
@@ -3549,7 +3633,7 @@ pub fn getErrorValueFromSlice(pt: Zcu.PerThread, name: []const u8) Allocator.Err
 
 /// Removes any entry from `Zcu.failed_files` associated with `file`. Acquires `Compilation.mutex` as needed.
 /// `file.zir` must be unchanged from the last update, as it is used to determine if there is such an entry.
-fn lockAndClearFileCompileError(pt: Zcu.PerThread, file_index: Zcu.File.Index, file: *Zcu.File) void {
+fn lockAndClearFileCompileError(zcu: *Zcu, file_index: Zcu.File.Index, file: *Zcu.File) void {
     const maybe_has_error = switch (file.status) {
         .never_loaded => false,
         .retryable_failure => true,
@@ -3571,13 +3655,13 @@ fn lockAndClearFileCompileError(pt: Zcu.PerThread, file_index: Zcu.File.Index, f
         return;
     }
 
-    const comp = pt.zcu.comp;
+    const comp = zcu.comp;
     const io = comp.io;
     comp.mutex.lockUncancelable(io);
     defer comp.mutex.unlock(io);
-    if (pt.zcu.failed_files.fetchSwapRemove(file_index)) |kv| {
+    if (zcu.failed_files.fetchSwapRemove(file_index)) |kv| {
         assert(maybe_has_error); // the runtime safety case above
-        if (kv.value) |msg| pt.zcu.gpa.free(msg); // delete previous error message
+        if (kv.value) |msg| zcu.gpa.free(msg); // delete previous error message
     }
 }
 
@@ -3900,13 +3984,14 @@ pub fn populateTestFunctions(pt: Zcu.PerThread) Allocator.Error!void {
 
 /// Stores an error in `pt.zcu.failed_files` for this file, and sets the file
 /// status to `retryable_failure`.
+/// Takes a `*Zcu` for the same reason `updateFile` does: it is reachable from the wide,
+/// tid-free AstGen lane, and a `tid` it does not receive is a `tid` it cannot spend.
 pub fn reportRetryableFileError(
-    pt: Zcu.PerThread,
+    zcu: *Zcu,
     file_index: Zcu.File.Index,
     comptime format: []const u8,
     args: anytype,
 ) error{OutOfMemory}!void {
-    const zcu = pt.zcu;
     const comp = zcu.comp;
     const io = comp.io;
     const gpa = comp.gpa;

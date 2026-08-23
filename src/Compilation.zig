@@ -1594,6 +1594,22 @@ const CacheUse = union(CacheMode) {
 pub const CreateOptions = struct {
     dirs: Directories,
     thread_limit: usize,
+    /// Number of `InternPool` partitions for this compilation's own pool.
+    ///
+    /// `null` means "the process-global thread-id pool size"
+    /// (`Zcu.PerThread.Id.poolLen`), which is the smallest value that can possibly be
+    /// correct — see the R1 discussion on `Zcu.init` and on `Id.poolLen` itself. This is
+    /// a DEFAULT rather than a field every sub-compilation forwards, deliberately:
+    /// `grep -rn '\.thread_limit = comp.thread_limit' src/` finds twelve sites that
+    /// construct a sub-`Compilation` from a parent, and an invariant that depends on
+    /// twelve call sites remembering to forward something is not an invariant. With the
+    /// default, `--intern-partitions` reaches every pool in the process through
+    /// `setThreadLimit` -> `Id.allocate` -> `poolLen()`, with no forwarding at all.
+    ///
+    /// Set it explicitly only to make a pool LARGER than the global tid pool. Setting it
+    /// smaller is refused by name in `Zcu.init`; queued item V3 is that refusal's
+    /// negative control.
+    intern_partitions: ?usize = null,
     self_exe_path: ?[]const u8 = null,
 
     /// Options that have been resolved by calling `resolveDefaults`.
@@ -2229,7 +2245,12 @@ pub fn create(gpa: Allocator, arena: Allocator, io: Io, diag: *CreateDiagnostic,
                 .analysis_roots_len = 0,
                 .codegen_task_pool = try .init(arena),
             };
-            try zcu.init(gpa, io, options.thread_limit);
+            // The (K, M_wide) split lands here: the pool is sized by the PARTITION
+            // count, not by the worker count. They were the same integer until
+            // `src/ThreadPlan.zig` separated them — `options.thread_limit` still means
+            // workers and is still forwarded to sub-compilations and `translateC`, but
+            // it no longer decides how the 30-bit index space is carved up.
+            try zcu.init(gpa, io, options.intern_partitions orelse Zcu.PerThread.Id.poolLen());
             break :blk zcu;
         } else blk: {
             if (options.emit_h != .no) return diag.fail(.emit_h_without_zcu);

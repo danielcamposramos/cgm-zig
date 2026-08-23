@@ -5333,7 +5333,9 @@ fn zirCImport(sema: *Sema, parent_block: *Block, inst: Zir.Inst.Index) CompileEr
         try zcu.alive_files.putNoClobber(zcu.gpa, c_import_file_index, undefined);
         break :file c_import_file_index;
     };
-    pt.updateFile(new_file_index, zcu.fileByIndex(new_file_index)) catch |err|
+    // Takes `zcu`, not `pt`: `updateFile` is the tid-free half of the AstGen lane split
+    // (see `Zcu/PerThread.zig`'s `workerUpdateFile`). The absent `tid` is the proof.
+    Zcu.PerThread.updateFile(zcu, new_file_index, zcu.fileByIndex(new_file_index)) catch |err|
         return sema.fail(&child_block, src, "C import failed: {s}", .{@errorName(err)});
 
     try pt.ensureFilePopulated(new_file_index);

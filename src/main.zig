@@ -454,7 +454,12 @@ const usage_build_generic =
     \\General Options:
     \\  -h, --help                Print this help and exit
     \\  --color [auto|off|on]     Enable or disable colored error messages
-    \\  -j<N>                     Limit concurrent jobs (default is to use all CPU cores)
+    \\  -j<N>                     Limit concurrent workers (default: all logical CPUs)
+    \\  --intern-partitions=[N|logical]
+    \\                            InternPool partition count (default: physical cores,
+    \\                            rounded up to a power of two). Fewer partitions means
+    \\                            a larger index ceiling per partition; 'logical' restores
+    \\                            the pre-split coupling to the logical CPU count.
     \\  -fincremental             Enable incremental compilation
     \\  -fno-incremental          Disable incremental compilation
     \\  -femit-bin[=path]         (default) Output machine code
@@ -1051,6 +1056,10 @@ fn buildOutputType(
     else
         .auto;
     var n_jobs: ?u32 = null;
+    // `--intern-partitions`: the knob that never existed. `-j` used to set both the
+    // worker count and the `InternPool` partition count because they were one integer;
+    // now `-j` means workers and this means partitions. See `src/ThreadPlan.zig`.
+    var intern_partitions: ?ThreadPlan.PartitionsArg = null;
 
     switch (arg_mode) {
         .build, .translate_c, .zig_test, .zig_test_obj, .run => {
@@ -1180,6 +1189,20 @@ fn buildOutputType(
                             fatal("number of jobs must be at least 1\n", .{});
                         }
                         n_jobs = num;
+                    } else if (mem.cutPrefix(u8, arg, "--intern-partitions=")) |str| {
+                        if (mem.eql(u8, str, "logical")) {
+                            intern_partitions = .logical;
+                        } else {
+                            const num = std.fmt.parseUnsigned(u32, str, 10) catch |err| {
+                                fatal("unable to parse intern partition count '{s}': {s}", .{
+                                    str, @errorName(err),
+                                });
+                            };
+                            if (num < 1) {
+                                fatal("number of intern partitions must be at least 1\n", .{});
+                            }
+                            intern_partitions = .{ .count = num };
+                        }
                     } else if (mem.eql(u8, arg, "--subsystem")) {
                         subsystem = try parseSubsystem(args_iter.nextOrFatal());
                     } else if (mem.eql(u8, arg, "-O")) {
@@ -3483,10 +3506,9 @@ fn buildOutputType(
     };
 
     // How much of the host this process will use, derived from a topology probe and
-    // reported in one line. `ThreadPlan` reproduces the derivation that used to live
-    // inline here; see `src/ThreadPlan.zig` for what each number means and
+    // reported in one line. See `src/ThreadPlan.zig` for what each number means and
     // `docs/crown/PATCH005_DOSSIER.md` §3 for why the report is unconditional.
-    const thread_plan: ThreadPlan = .derive(n_jobs);
+    const thread_plan: ThreadPlan = .derive(n_jobs, intern_partitions);
     thread_plan.report();
     const thread_limit = thread_plan.workers;
     try setThreadLimit(arena, thread_plan);
@@ -5270,7 +5292,10 @@ fn cmdBuild(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8, 
 
     // Second of the three derivation sites (`zig build`). The dossier's §0 correction 1
     // reported one; there are three, and all three funnel into `setThreadLimit`.
-    const thread_plan: ThreadPlan = .derive(n_jobs);
+    // `--intern-partitions` is not parsed here: `zig build` compiles only the build
+    // runner in-process, and the partition count that matters for a user's code belongs
+    // to the child compilers the runner spawns.
+    const thread_plan: ThreadPlan = .derive(n_jobs, null);
     thread_plan.report();
     const thread_limit = thread_plan.workers;
     try setThreadLimit(arena, thread_plan);
@@ -5761,7 +5786,7 @@ fn jitCmd(
 
     // Third derivation site (`jitCmd`: `zig fmt`, `zig reduce`, ...). No `-j` reaches
     // here, so the plan is fully derived.
-    const thread_plan: ThreadPlan = .derive(null);
+    const thread_plan: ThreadPlan = .derive(null, null);
     thread_plan.report();
     const thread_limit = thread_plan.workers;
     try setThreadLimit(arena, thread_plan);
@@ -7938,6 +7963,11 @@ fn setThreadLimit(arena: std.mem.Allocator, plan: ThreadPlan) Allocator.Error!vo
     // `plan.partitions` already carries `InternPool.init`'s `@max(_, 2)` floor
     // (`InternPool.zig:6295`), applied where it can be reported rather than here where
     // it could not be.
+    //
+    // This one call is also how `--intern-partitions` reaches EVERY `InternPool` in the
+    // process, including the ~20 prelink sub-compilations: the tid pool is
+    // process-global, and `Compilation.CreateOptions.intern_partitions` defaults to
+    // `Id.poolLen()`. No forwarding, so no forwarding site to forget (dossier R1).
     try Zcu.PerThread.Id.allocate(arena, plan.partitions);
 }
 

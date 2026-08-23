@@ -2823,8 +2823,38 @@ pub const CompileError = error{
     ComptimeBreak,
 };
 
-pub fn init(zcu: *Zcu, gpa: Allocator, io: Io, thread_count: usize) !void {
-    try zcu.intern_pool.init(gpa, io, thread_count);
+/// `intern_partitions` sizes this `Zcu`'s own `InternPool`: `ip.locals` gets that many
+/// entries, and `tid_width = ceil(log2(max(_, 2)))` splits the 30-bit index space that
+/// many ways (`InternPool.zig:6295-6335`).
+///
+/// The guard below is dossier risk R1 made loud. The thread-id pool is process-global
+/// (`PerThread.Id.poolLen`), a tid is a direct index into whichever pool is active
+/// (`getLocal`, `InternPool.zig:1446-1448`), and a single process has many pools alive at
+/// once — every prelink sub-compilation builds one. A pool smaller than the global tid
+/// pool is therefore not "a bit tight"; it is an out-of-bounds read waiting for the first
+/// worker that happens to be handed a high tid. That is the silent-wild-pointer failure
+/// mode this fork exists to abolish, so it is refused BY NAME, with both numbers and a
+/// remedy, at a cost of one comparison per `Compilation`.
+pub fn init(zcu: *Zcu, gpa: Allocator, io: Io, intern_partitions: usize) !void {
+    // Mirror `InternPool.init`'s own floor (`InternPool.zig:6295`) so the comparison is
+    // against the pool that will actually be allocated, not against the request.
+    const effective = @max(intern_partitions, 2);
+    const pool_len = PerThread.Id.poolLen();
+    if (effective < pool_len) {
+        @branchHint(.cold);
+        std.debug.panic(
+            "InternPool: partition count {d} is smaller than the process-global thread-id " ++
+                "pool ({d} ids). Thread ids are handed out process-wide and used as direct " ++
+                "indices into whichever InternPool is active, so EVERY pool in the process " ++
+                "must have at least as many partitions as that pool can issue ids. This " ++
+                "compilation would index past the end of its own `locals` array the first " ++
+                "time it was handed a tid above {d}. Either raise this compilation's " ++
+                "partition count or lower `--intern-partitions` for the whole process; the " ++
+                "two are not independently choosable.",
+            .{ effective, pool_len, effective - 1 },
+        );
+    }
+    try zcu.intern_pool.init(gpa, io, intern_partitions);
 }
 
 pub fn deinit(zcu: *Zcu) void {
