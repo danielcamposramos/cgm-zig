@@ -43,7 +43,36 @@ cpu_count_error: ?std.Thread.CpuCountError,
 /// Number of threads that are unavailable to take tasks. To calculate
 /// available count, subtract this from either `async_limit` or
 /// `concurrent_limit`.
+///
+/// Note what that "either" concedes: ONE counter is tested against TWO limits, by four
+/// admission gates -- `async` and `groupAsync` test it against `async_limit`, `concurrent`
+/// and `groupConcurrent` against `concurrent_limit`. There is no reservation of any kind
+/// between them, so ordinary `io.async` work consumes the budget `io.concurrent` tests
+/// against. See `concurrent_reserve`.
 busy_count: usize = 0,
+/// Admission budget withheld from `io.async` so that `io.concurrent` can still be
+/// granted.
+///
+/// THE PROBLEM. `busy_count` is one counter serving two limits with no reservation
+/// between them, so a caller that keeps `async_limit` tasks in flight makes every
+/// subsequent `io.concurrent` return `error.ConcurrencyUnavailable` -- not because the
+/// concurrency was unavailable, but because async work spent the budget first. When a
+/// program uses `io.concurrent` for a long-lived pipeline stage and `io.async` for
+/// bulk work, the pipeline stage is the thing that loses, and it loses silently: the
+/// caller's fallback runs the work inline and the program merely gets slower.
+///
+/// THE FIX, and its honest limit. The two `io.async` admission tests additionally count
+/// this reserve, so `async` stops admitting `concurrent_reserve` slots early and leaves
+/// them for `concurrent`. It is a COARSE instrument: it does not distinguish which of
+/// `busy_count`'s occupants are concurrent tasks (which legitimately consume the reserve)
+/// from async ones. The precise form tracks two counters, which means tagging every
+/// queue node with its kind -- a restructuring of a hot scheduler that upstream has
+/// already reworked once and proposed reworking again. The coarse form is the correct
+/// trade at this fork's rebase posture, and it is refused rather than disproven.
+///
+/// Defaults to `0`, which is exactly today's behaviour: with no reserve the predicates
+/// below are byte-for-byte the arithmetic they always were.
+concurrent_reserve: usize = 0,
 worker_threads: std.atomic.Value(?*Thread),
 pid: Pid = .unknown,
 
@@ -1590,6 +1619,10 @@ pub const InitOptions = struct {
     ///
     /// After this number, calls to `Io.concurrent` return `error.ConcurrencyUnavailable`.
     concurrent_limit: Io.Limit = .unlimited,
+    /// Admission budget withheld from `Io.async` so `Io.concurrent` can still be granted.
+    /// See `Threaded.concurrent_reserve`. Defaults to `0`: no reserve, behaviour
+    /// identical to not having this option at all.
+    concurrent_reserve: usize = 0,
     /// Affects the following operations:
     /// * `processExecutablePath` on OpenBSD and Haiku.
     argv0: Argv0 = .empty,
@@ -1621,6 +1654,7 @@ pub fn init(
         .async_limit = options.async_limit orelse init_single_threaded.async_limit,
         .cpu_count_error = init_single_threaded.cpu_count_error,
         .concurrent_limit = options.concurrent_limit,
+        .concurrent_reserve = options.concurrent_reserve,
         .old_sig_io = undefined,
         .old_sig_pipe = undefined,
         .have_signal_handler = init_single_threaded.have_signal_handler,
@@ -1638,6 +1672,7 @@ pub fn init(
         .stack_size = options.stack_size,
         .async_limit = options.async_limit orelse if (cpu_count) |n| .limited(n - 1) else |_| .nothing,
         .concurrent_limit = options.concurrent_limit,
+        .concurrent_reserve = options.concurrent_reserve,
         .cpu_count_error = if (cpu_count) |_| null else |e| e,
         .old_sig_io = undefined,
         .old_sig_pipe = undefined,
@@ -2097,7 +2132,9 @@ fn async(
 
     const busy_count = t.busy_count;
 
-    if (busy_count >= @intFromEnum(t.async_limit)) {
+    // `+ t.concurrent_reserve`: leave that many admission slots for `io.concurrent`.
+    // Zero by default, so this is the stock predicate unless a caller asked otherwise.
+    if (busy_count + t.concurrent_reserve >= @intFromEnum(t.async_limit)) {
         mutexUnlock(&t.mutex);
         future.destroy(gpa);
         start(context.ptr, result.ptr);
@@ -2194,7 +2231,9 @@ fn groupAsync(
 
     const busy_count = t.busy_count;
 
-    if (busy_count >= @intFromEnum(t.async_limit)) {
+    // `+ t.concurrent_reserve`: leave that many admission slots for `io.concurrent`.
+    // Zero by default, so this is the stock predicate unless a caller asked otherwise.
+    if (busy_count + t.concurrent_reserve >= @intFromEnum(t.async_limit)) {
         mutexUnlock(&t.mutex);
         task.destroy(gpa);
         return groupAsyncEager(start, context.ptr);

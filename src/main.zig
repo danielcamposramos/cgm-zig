@@ -7971,6 +7971,24 @@ fn setThreadLimit(arena: std.mem.Allocator, plan: ThreadPlan) Allocator.Error!vo
             const limit: Io.Limit = .limited(plan.workers - 1);
             io_impl_ptr.setAsyncLimit(limit);
             io_impl_ptr.concurrent_limit = limit;
+            // Reserve one admission slot for `io.concurrent`, and the beneficiary is the
+            // linker. `link/Queue.zig:67` obtains the whole linker task through
+            // `io.concurrent`; when that returns `error.ConcurrencyUnavailable` the
+            // `else` arm at `:70-76` sets both queues `undefined` and link tasks run on
+            // the main thread instead -- the pipeline silently re-serialises, with no
+            // diagnostic, and the only surviving evidence is a shape in a `--time-report`.
+            //
+            // It could not previously be prevented from up here, because `busy_count` is
+            // one counter serving both limits: `plan.workers - 1` in-flight AstGen or
+            // codegen tasks are enough, on their own, to make the linker's request fail.
+            // The reserve makes the guarantee hold regardless of what this compilation
+            // does above it.
+            //
+            // Only when there are at least two async slots to begin with: a reserve that
+            // consumed the ENTIRE async lane would force every task inline, trading real
+            // workers for a guarantee that only matters when workers exist. At `-j1` and
+            // `-j2` the behaviour is therefore exactly what it was.
+            io_impl_ptr.concurrent_reserve = if (@intFromEnum(limit) >= 2) 1 else 0;
         },
         .evented => {},
     }
