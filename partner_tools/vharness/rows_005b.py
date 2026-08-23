@@ -617,3 +617,88 @@ def v15(ctx):
                    f"{parked} of {denom} thread-samples across {samples} samples",
                    {"samples": samples, "thread_samples": denom, "parked": parked,
                     "max_parked": max_parked, "zig_frames": zig_frames, "parked_pct": frac})
+
+
+# --------------------------------------------------------------------- V16 --
+
+@vlib.row("V16", "005b", "THE HANG CLASS — a starved tid pool must complete or refuse, never hang",
+          "timeout(120) over four small-K configurations; rc=124 is the forbidden outcome")
+def v16(ctx):
+    """V16 is a REGRESSION PIN for a failure class, not a check on one flag.
+
+    `Zcu.PerThread.Id.allocate(n)` seeds the assignable-tid pool with n-1 entries; the
+    linker acquires one tid and holds it for the whole compilation (dossier 1.1, A7).
+    Lanes left for allocating workers are therefore K-2 -- exactly the `alloc lanes`
+    number the report line prints. At K=2 that is ZERO and every worker asking for a
+    tid blocks forever in `tid_cond.waitUncancelable`. No error, no timeout, no bytes.
+
+    K=2 IS REACHABLE WITH NO FLAG: `basis = max(physical orelse logical, 2)`, so a
+    1- or 2-physical-core host derives it, as does any taskset onto <=2 CPUs. Stock
+    0.16.0 cannot reach it (one integer set both quantities), so the (K, M_wide)
+    decoupling introduced it.
+
+    TWO OUTCOMES ARE GREEN -- completion, or a NAMED REFUSAL. Exactly one is RED:
+    rc=124, the timeout firing. The row forbids silence, not any particular policy.
+
+    The `-j1` row must stay rc=0: the serial member is legitimate and a guard that
+    refuses it has OVER-FIRED and is itself a defect. That is asserted here so the
+    fix cannot pass by being too loud.
+    """
+    fx = ctx.fixtures.get("hello")
+    if not fx:
+        return unknown("V16", "hello fixture unavailable", "0 of 4 configurations")
+
+    # Two sibling-free CPUs = 2 distinct physical cores on this host (siblings are
+    # (0,6)(1,7)(2,8)(3,9)(4,10)(5,11)), which is what makes the derived K=2 case
+    # reachable without any flag. A sibling PAIR (4,10) is 1 physical core.
+    cases = [
+        ("given-K2-j4", ["-j4", "--intern-partitions=2"], None, True),
+        ("derived-2-physical", [], "4,5", True),
+        ("derived-1-physical", [], "4,10", True),
+        ("j1-K2-must-work", ["-j1", "--intern-partitions=2"], None, False),
+    ]
+
+    rows, hangs, refusals, completions = [], [], [], []
+    for tag, extra, mask, may_refuse in cases:
+        e = cold_local_cache(ctx.env_zig, f"V16_{tag}")
+        r = run_cmd([ctx.zig, "build-obj", "-fno-emit-bin", "-Mroot=hello.zig"] + extra,
+                    cwd=fx["dir"], env=e, mask=mask or ctx.mask, timeout=120)
+        text = (r.stderr or "") + (r.stdout or "")
+        # A refusal is a NAMED one: it must terminate non-zero AND say something about
+        # the lanes/partitions. An exit(1) with no explanation is not a refusal, it is
+        # a crash, and this row must not accept it as one.
+        named = (not r.timed_out and r.rc != 0
+                 and any(k in text for k in ("alloc lane", "intern-partitions",
+                                             "partition", "lane")))
+        if r.timed_out:
+            state = "HANG (rc=124)"
+            hangs.append(tag)
+        elif r.rc == 0:
+            state = "completed rc=0"
+            completions.append(tag)
+        elif named:
+            state = f"refused by name rc={r.rc}"
+            refusals.append(tag)
+        else:
+            state = f"exited rc={r.rc} WITHOUT naming the cause"
+            hangs.append(tag + "(unnamed-exit)")
+        rows.append(f"{tag} [{'|'.join(extra) or 'no flags'}"
+                    + (f", taskset {mask}" if mask else "") + f"] -> {state}"
+                    + ("" if may_refuse else "  (MUST be rc=0)"))
+
+    # The -j1 member is the over-fire check: it may not be refused.
+    overfired = "j1-K2-must-work" not in completions
+    verdict = RED if (hangs or overfired) else GREEN
+    ev = "; ".join(rows)
+    if hangs:
+        ev += (f". RED: {len(hangs)} of 4 configurations produced a silent hang or an "
+               f"unnamed exit -- the exact failure class patch/001 exists to abolish.")
+    elif overfired:
+        ev += (". RED: the guard OVER-FIRED. `-j1 --intern-partitions=2` is a legitimate "
+               "serial configuration and refusing it breaks a working setup; a guard that "
+               "refuses -j1 is itself a defect.")
+    else:
+        ev += (f". GREEN: 0 of 4 hung; {len(completions)} completed, {len(refusals)} refused "
+               f"by name. Both outcomes are acceptable; only silence is not.")
+    return Verdict("V16", verdict, ev, f"{len(hangs)} hangs of 4 configurations",
+                   {"hangs": hangs, "refusals": refusals, "completions": completions})
