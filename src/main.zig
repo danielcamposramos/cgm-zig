@@ -6346,11 +6346,18 @@ const usage_ast_check =
     \\                        checked against exactly that module's declared deps (not
     \\                        every module's union), and file imports (.zig/.zon) are
     \\                        additionally sandbox-checked against the module's own root
-    \\                        directory, matching Package/Module.zig's own contract that
-    \\                        only files inside that directory can be imported (Crown
-    \\                        stage 0.5 rung 4). Requires --module-graph=<path>; invalid
-    \\                        alone. In batch mode, one --as-module binds ALL .zig
-    \\                        members of the batch -- there is no per-file binding.
+    \\                        directory (Crown stage 0.5 rung 4). Requires
+    \\                        --module-graph=<path>; invalid alone. In batch mode, one
+    \\                        --as-module binds ALL .zig members of the batch -- there is
+    \\                        no per-file binding.
+    \\                        DIVERGENCE, stated: the sandbox check is a strictness this
+    \\                        flag CHOOSES. The compiler enforces no @import sandbox
+    \\                        today -- only @embedFile refuses an outside-package path --
+    \\                        so --as-module can reject an @import that compiles fine.
+    \\                        Package/Module.zig states the intended contract ("Only
+    \\                        files inside this directory can be imported"); this flag
+    \\                        checks it before a build rather than reporting parity with
+    \\                        one the compiler already enforces.
     \\  --json                Emit per-file diagnostics and the batch summary as one
     \\                        machine-readable JSON document to stdout instead of the
     \\                        human-readable rendering (Crown stage 0.5 rung 3; valid

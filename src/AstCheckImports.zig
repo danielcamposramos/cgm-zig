@@ -50,11 +50,23 @@
 //! checks from rung 1's advisory, graph-wide semantics to the compiler's own strict,
 //! per-module semantics: named imports are checked against that module's own `deps[].
 //! import_name` set (not the union every other module contributes to), and file imports
-//! (`.zig`/`.zon`) are additionally sandbox-checked against the module's own root directory
-//! -- `Package/Module.zig`'s own contract ("Only files inside this directory can be
-//! imported"), enforced here *before* a build, not merely observed by one. Absent
-//! `--as-module`, `binding` below is `null` everywhere and both checks fall back to rung
-//! 1's original union/no-sandbox behavior byte-for-byte -- see `collectGraphViolations`.
+//! (`.zig`/`.zon`) are additionally sandbox-checked against the module's own root directory.
+//! Absent `--as-module`, `binding` below is `null` everywhere and both checks fall back to
+//! rung 1's original union/no-sandbox behavior byte-for-byte -- see
+//! `collectGraphViolations`.
+//!
+//! THE SANDBOX CHECK IS A CHOSEN STRICTNESS, NOT PARITY WITH THE COMPILER (review finding
+//! V7). The head commit cited `Package/Module.zig`'s doc comment ("Only files inside this
+//! directory can be imported") as though the compiler enforced it for `@import`. It does
+//! not, verified in this tree: `Zcu/PerThread.zig`'s `discoverImport` (the `@import` path)
+//! calls `upJoin` and performs no containment check at all, and the only
+//! `error.ImportOutsideModulePath` in the tree is raised inside `pub fn embedFile`
+//! (`Zcu/PerThread.zig:2881`, surfaced at `Sema.zig:13063`) -- i.e. `@embedFile` alone
+//! refuses an outside-package path. So `--as-module` can and will reject an `@import` that
+//! builds today. That is defensible as a pre-build discipline -- Module.zig's line is the
+//! documented intent, and a hyper-modular estate wants it enforced -- but it is a
+//! divergence, and the flag says so in its own help text and in the violation it emits,
+//! rather than implying a rule the compiler already applies.
 
 const std = @import("std");
 const mem = std.mem;
