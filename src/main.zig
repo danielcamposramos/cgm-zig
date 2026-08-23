@@ -3134,6 +3134,19 @@ fn buildOutputType(
         fatal("--time-report requires --listen, or --time-report-json <path> to write the same numbers to a file", .{});
     }
 
+    // REFUSE THE COMBINATION BY NAME, because the alternative is a silent no-op.
+    // Under `--listen` this function returns through `serve()` and never reaches the
+    // `writeTimeReportJson` call site, so `--time-report-json` would be accepted,
+    // produce no file, and report success -- an operator would read the exit code as
+    // "written" and find nothing there. Doctrine 2: present, or refuse by name. The
+    // message says which sink actually carried the numbers so the refusal is
+    // actionable rather than merely correct.
+    if (time_report_json != null and listen != .none) {
+        fatal("--time-report-json cannot be combined with --listen: the listen path streams time reports " ++
+            "to the IPC client per update, and this flag writes one file after a single update. " ++
+            "Use one sink or the other.", .{});
+    }
+
     if (arg_mode == .translate_c and create_module.c_source_files.items.len != 1) {
         fatal("translate-c expects exactly 1 source file (found {d})", .{create_module.c_source_files.items.len});
     }
