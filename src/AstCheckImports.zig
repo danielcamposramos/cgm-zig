@@ -121,13 +121,21 @@ const Stats = struct {
     skipped_nonliteral: usize = 0,
 };
 
+/// True iff `path` names a ZON document. The one place this extension rule is spelled
+/// (review finding MINOR 8: it had been re-spelled inline at rung 2's target-resolution
+/// site, so the two spellings could drift). `isFileImport` below composes it rather than
+/// repeating it, which is the whole point.
+fn isZonPath(path: []const u8) bool {
+    return mem.endsWith(u8, path, ".zon");
+}
+
 /// True iff `import_path` denotes a relative FILE import rather than a named module.
 /// Mirrors the compiler's own classification (`src/Zcu/PerThread.zig:2384`): a file import
 /// is any operand ending in ".zig" or ".zon". Shared by rung 1's import-validity walk and
 /// rung 2's decl-existence target resolution (`checkDeclExistence`) so the two rungs can
 /// never drift apart on this question -- see this file's top doc comment.
 fn isFileImport(import_path: []const u8) bool {
-    return mem.endsWith(u8, import_path, ".zig") or mem.endsWith(u8, import_path, ".zon");
+    return mem.endsWith(u8, import_path, ".zig") or isZonPath(import_path);
 }
 
 /// Loads `graph_path` and validates every `@import` in `tree` against it, then prints the
@@ -670,8 +678,10 @@ fn classifyMemberRef(
     };
 
     const outcome = target_cache.get(resolved_path) orelse resolve_blk: {
-        const is_zon = mem.endsWith(u8, resolved_path, ".zon");
-        const computed = try resolveTarget(arena, io, resolved_path, is_zon);
+        // `isZonPath`, not a second inline spelling of the extension rule (review finding
+        // MINOR 8) -- one rule, one place, so rung 1's classification and rung 2's opacity
+        // decision can never disagree about what a ZON file is.
+        const computed = try resolveTarget(arena, io, resolved_path, isZonPath(resolved_path));
         try target_cache.put(arena, resolved_path, computed);
         break :resolve_blk computed;
     };
@@ -716,7 +726,26 @@ fn resolveTarget(arena: Allocator, io: Io, resolved_path: []const u8, is_zon: bo
     var names: std.StringHashMapUnmanaged(void) = .empty;
     for (tree.rootDecls()) |decl| {
         switch (tree.nodeTag(decl)) {
-            .fn_decl => {
+            // `.fn_decl` is a function WITH a body. A body-less prototype -- `pub extern fn
+            // malloc(...) ?*anyopaque;`, `pub extern "c" fn free(...) void;` -- never wears
+            // that tag; the parser gives it `fn_proto_simple`/`_multi`/`_one`/`fn_proto`
+            // directly, with no `fn_decl` wrapper. Collecting only `.fn_decl` therefore
+            // dropped every prototype from the target's public surface and reported each
+            // legal reference to one as a MISSING declaration -- the exact false positive
+            // this rung exists to not produce (review finding BLOCKER 1, the no-guessing
+            // gate).
+            //
+            // Measured on this tree with std.zig.Ast (scratchpad/rung2_probe/census.zig,
+            // the same parser the production path uses -- doctrine 5, parse don't grep):
+            // lib/std alone holds 676 public root `fn_proto*` decls across 15 of 550 files,
+            // against 10,351 collected before this fix and 11,027 after. (The review
+            // reported 566 for this class; the AST census says 676. The finding stands, its
+            // denominator is corrected here rather than repeated.)
+            //
+            // `fullFnProto` accepts all five tags, so the two arms differ only in which
+            // tags reach them; the body of the collection is identical, which is why they
+            // are one arm here rather than two.
+            .fn_decl, .fn_proto, .fn_proto_simple, .fn_proto_multi, .fn_proto_one => {
                 var buf: [1]Ast.Node.Index = undefined;
                 const proto = tree.fullFnProto(&buf, decl).?;
                 if (proto.visib_token != null) {
