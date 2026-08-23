@@ -49,6 +49,7 @@ why of everything here. AI partners are welcome as senior contributors:
 | `docs/crown/PLAN.md` | The staged roadmap (observability → tooling → cache → tiles) |
 | `docs/crown/DOCTRINE.md` | Seven design principles the fork builds by |
 | `docs/crown/INTERNALS_MAP.md` | Compiler internals map with file:line citations |
+| `docs/crown/BUILDING.md` | **Build recipe + every gotcha with its negative control. Read before any build.** |
 | `partner_tools/` | Python tooling for status, repro, oracles, patch ledger |
 
 ## Workflows (each proven in this repo's history — see the commits they cite)
@@ -79,16 +80,38 @@ names the subset, keeping all declarations resolvable. Expect saturation if
 the cause is accumulation rather than one construct — an isolation ladder
 (tiny / medium / full closure) distinguishes the two cheaply.
 
-**Build the safe compiler (the recipe that worked, with its gotchas):**
+**Build the safe compiler — read `docs/crown/BUILDING.md` FIRST.** It carries the
+full recipe and every gotcha with its negative control. The short form:
 - Plain source tarball + system LLVM (Debian: `llvm-21`, `liblld-21-dev`,
   `libclang-21-dev` — the runtime `libclang-cpp.so` alone is NOT enough),
   cmake + ninja, `-DCMAKE_BUILD_TYPE=ReleaseSafe`.
 - **`-Ddebug-extensions` is not optional** — the crash-report machinery
   ("Analyzing <file>") is compiled out without it, and that machinery is the
   point of a diagnostic build.
-- Debian multiarch defeats `zig libc` auto-detection (`asm/types.h`): provide
-  the include paths explicitly if the stage3 build complains.
-- ~8–9 min wall, ~7.6 GiB peak on a 12-core host. Respect machine courtesy.
+- **`ZIG_LIBC` is mandatory on Debian multiarch.** `zig libc` reports
+  `sys_include_dir=/usr/include`, but `asm/types.h` lives in
+  `/usr/include/x86_64-linux-gnu`, so the bundled libunwind sub-compilation
+  fails with `'asm/types.h' file not found`. Write a libc paths file with
+  `sys_include_dir=/usr/include/x86_64-linux-gnu` and export `ZIG_LIBC` — it is
+  read at `main.zig:1049` and reaches every sub-compilation. Proven by negative
+  control on the *unpatched* compiler: without it `rc=1`, with it `rc=0`.
+- **Set `ZIG_GLOBAL_CACHE_DIR` / `ZIG_LOCAL_CACHE_DIR` to repo-local `build-*/`
+  paths.** The default `~/.cache/zig` may be a symlink into another tree, and an
+  external cleaner has destroyed a lane's `/tmp` scratch mid-run. Never `/tmp`.
+- Wall time: ~8–9 min unconstrained on an idle 12-core host; **≈41 min under an
+  8-CPU `taskset` mask on a contended one.** Quote the mask with the number.
+  Respect machine courtesy.
+- **ThreadSanitizer does not build here** — `linux/scc.h` is no longer shipped by
+  Debian, and TSan asserts on the struct sizes that header provides, so a shim is
+  not lawful. Any TSan-instrumented row is UNRUNNABLE; say so by name.
+
+**Type-check without building (~45 s — the cheap oracle):**
+`zig build-exe -fno-emit-bin -OReleaseSafe -lc --zig-lib-dir lib/ --dep aro
+--dep build_options -Mroot=src/main.zig -Maro=lib/compiler/aro/aro.zig
+-Mbuild_options=<build-*/config.zig>`. Runs on the promoted binary, works on any
+branch via `git worktree`. It proves the tree compiles and **nothing about
+behaviour**. This is how `main` was found to have been un-buildable for a full
+day without anyone meeting it.
 
 **Land a change:** receipts per `CONTRIBUTING-AI.md`, commit body carries
 who-did-what and any reviewer objections + resolutions,
