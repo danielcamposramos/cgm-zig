@@ -1,0 +1,8 @@
+# Fixtures are GENERATED (generate.py), never committed: the AstGen fan-out alone
+# is 1,201 files and the self-host snapshot is 268 MB. Only the generator and this
+# file are tracked. Belt-and-braces: the harness writes its fixtures to
+# `build-vharness/fixtures/` (already gitignored by `build-*/`), so this rule is a
+# second line of defence against an accidental `git add` of a generated tree.
+*
+!.gitignore
+!generate.py
