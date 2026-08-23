@@ -6316,9 +6316,13 @@ const usage_ast_check =
     \\                        graph (Crown stage 0.5 rung 1; requires [file], not stdin)
     \\  --check-decls         Also resolve top-level declaration references reached via
     \\                        @import (Crown stage 0.5 rung 2, "sema-lite"; requires
-    \\                        --module-graph). Must be run from the same working directory
-    \\                        the graph was emitted from: the graph records each module's
-    \\                        root relative to that directory.
+    \\                        --module-graph). Scope: NAME EXISTENCE ONLY -- whether the
+    \\                        referenced declaration exists and is public. Argument counts,
+    \\                        types and comptime are NOT checked; PLAN.md's "arity-level
+    \\                        shape" for this rung is deferred, not approximated, and every
+    \\                        summary line says so. Must be run from the same working
+    \\                        directory the graph was emitted from: the graph records each
+    \\                        module's root relative to that directory.
     \\
     \\
 ;

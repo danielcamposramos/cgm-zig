@@ -366,9 +366,34 @@ fn loadGraph(arena: Allocator, io: Io, graph_path: []const u8) GraphDoc {
 
 // ===========================================================================================
 // Stage 0.5 rung 2 -- the decl-existence pass ("sema-lite", `docs/crown/PLAN.md` Stage 0.5
-// item 2). Honest scope, restated from the plan: name existence and single-level alias
-// resolution only -- no types, no comptime, no multi-hop or dynamic aliasing. Two shapes of
-// member access are resolved:
+// item 2).
+//
+// SCOPE, AND ONE DECLARED DEFERRAL (review finding MODERATE 7). PLAN.md charters this rung
+// as "name existence and arity-level shape only." What is implemented here is NAME
+// EXISTENCE ONLY. Arity is DEFERRED -- declared, not delivered, and not approximated.
+//
+// The head commit narrowed the plan's scope silently, which is the one thing a rung whose
+// entire purpose is "say what you checked" must never do. Naming the gap costs nothing and
+// leaves the next contributor the real state; hiding it would have left them a rung that
+// quietly under-delivers against its own charter and a plan that reads as satisfied.
+//
+// Why deferred rather than attempted: an honest arity check is not a parameter count. It
+// has to survive method-call sugar (`m.f(x)` may pass the receiver, or may not, depending
+// on what `m.f` resolves to -- a question this rung has no types to answer), variadic and
+// `anytype` parameters, comptime-generic parameters that change the callable shape, and
+// default-carrying call shapes. Each of those is a "no types, no comptime" question, and
+// this rung's whole contract is that it does not pretend to answer those. A parameter-count
+// comparison that fired on any of them would produce exactly the false positive on legal
+// code that BLOCKER 1 was raised about. If arity lands, it needs its own opacity rules and
+// its own counted buckets, which is a rung's worth of work, not a prong.
+//
+// Where the deferral is stated so it reaches an operator and not only a reader of this
+// file: `zig ast-check --help` (`usage_ast_check` in main.zig) and the rung-2 summary line
+// itself, which ends in "arity: DEFERRED (name existence only)" on every run, pass or fail.
+//
+// Honest scope, restated from the plan: name existence and single-level alias resolution
+// only -- no types, no comptime, no multi-hop or dynamic aliasing. Two shapes of member
+// access are resolved:
 //
 //   (a) inline:        `@import("x").foo`
 //   (b) single alias:  `const m = @import("x"); ... m.foo`  (`m` a file-scope `const` bound
@@ -824,9 +849,20 @@ fn classifyMemberRef(
         try std.fs.path.join(arena, &.{ checked_dir, import_path })
     else named_blk: {
         const mt = (named_targets.get(import_path) orelse null) orelse {
-            // Registered somewhere in the graph-wide union (rung 1 already required this,
-            // or `cmdAstCheck` would have exited before rung 2 ever ran) but not resolvable
-            // to one concrete module node here -- see `checkDeclExistence`'s doc comment.
+            // Not resolvable to one concrete module node -- see `checkDeclExistence`'s
+            // doc comment for when a name collapses to null (two modules disagree about
+            // what it points at, or stage 0 recorded no `dep_index` for it).
+            //
+            // The head commit's version of this comment claimed rung 1 "would have exited
+            // before rung 2 ever ran," so an unregistered name could not reach here.
+            // FALSE, and review finding MODERATE 6 caught it: `checkAgainstGraph` collects
+            // rung 1's violations into a shared `ErrorBundle.Wip`, then runs rung 2 into
+            // the SAME bundle, and only renders and `process.exit(1)`s after both. That is
+            // deliberate -- one invocation should report both rungs' findings, not make
+            // the operator run twice -- but it means rung 2 does see names rung 1 rejected,
+            // and the count below must be correct on its own rather than by appeal to an
+            // exit that has not happened yet. A comment asserting control flow the code
+            // does not have is worse than no comment: it is a false proof (doctrine 7).
             stats.target_unresolvable += 1;
             return;
         };
@@ -936,7 +972,7 @@ fn printDeclSummary(io: Io, stats: DeclStats) !void {
     defer io.unlockStderr();
     const w = &locked.file_writer.interface;
     try w.print(
-        "member refs seen {d}: validated {d}, missing {d}, opaque-skipped {d}, alias-too-deep {d}, target-unresolvable {d}, target-unreadable {d}, operand-unparsable {d}, exempt {d}\n",
+        "member refs seen {d}: validated {d}, missing {d}, opaque-skipped {d}, alias-too-deep {d}, target-unresolvable {d}, target-unreadable {d}, operand-unparsable {d}, exempt {d}; arity: DEFERRED (name existence only)\n",
         .{
             stats.total(),
             stats.validated,
