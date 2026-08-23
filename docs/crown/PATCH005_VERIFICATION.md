@@ -195,6 +195,24 @@ names `--intern-partitions` and not `-j`. The second completes and reproduces th
 mitigation's wall/RSS.
 
 **V12 — HARD GATE for the A1 lane split (R12).**
+
+> **THE CRITERION WAS REPLACED ON 2026-08-23.** The original is preserved verbatim
+> below as V12-OLD together with the measurement that invalidated it; V12-NEW is
+> **operative**. The gate itself is unchanged and is still a gate — what changed is
+> the instrument, because the original instrument was measured to be incapable of
+> discriminating the thing it was pointed at.
+
+**What the gate is actually asking**, stated once so no instrument can drift from it:
+*does the A1 lane split introduce nondeterminism or a data race that the unpatched
+compiler does not already have?* Note the last clause. R12 is a claim about **the
+patch**, so every criterion for it must be **differential** against the unpatched
+compiler. A criterion that the reference compiler also fails measures the toolchain,
+not the change.
+
+---
+
+#### V12-OLD — the original criterion, and its invalidity proof
+
 ```
 # 1. ReleaseSafe, the full closure, five times -- nondeterministic corruption shows as flakiness
 for i in $(seq 5); do $SAFE build-exe -Mroot=<~1,800-module product>; \
@@ -202,15 +220,123 @@ for i in $(seq 5); do $SAFE build-exe -Mroot=<~1,800-module product>; \
 # 2. ThreadSanitizer build of the compiler over a mid-size closure
 <tsan stage3> build-exe -Mroot=<mid-size project>
 ```
-*Expect:* 5/5 exit 0 with **identical artifact digests**, and **zero** TSan reports naming
+*Expected:* 5/5 exit 0 with identical artifact digests, and zero TSan reports naming
 `InternPool` or `Zcu.File`.
-**Negative control for the instrument itself:** on a scratch copy, delete the
-`.acquire`/`release` pair from the import-discovery tail as well, and confirm TSan goes
-red. A sanitizer that never reported anything has not been met.
-**Stop rule:** any race report, or any digest mismatch across the five, **stops the
-split**. The remedy is to move `.acquire` back to the top of `workerUpdateFile` and forfeit
-the wide-lane win rather than risk it. This is not negotiable by argument; only by a clean
-run.
+
+**Part 1 is INVALID, and this is the measurement that says so:**
+
+```
+promoted (UNPATCHED) compiler, build-obj of a std-pulling file, cold cache, default -j
+  3 runs -> 3 DIFFERENT whole-file digests
+promoted (UNPATCHED) compiler, same workload, -j1
+  3 runs -> 3 IDENTICAL digests
+```
+
+**Zig 0.16.0 in this tree is not byte-reproducible at `-j > 1`, and the unpatched
+compiler fails this row identically.** The row therefore cannot distinguish "the
+patch introduced nondeterminism" from "this toolchain is not byte-reproducible in
+parallel" — it returns RED for both. A criterion the negative control also fails is
+not a race detector; it is a thermometer that reads the room.
+
+The variation was located rather than assumed: it lives **entirely outside `.text`**
+(link-time metadata), and `.text` is stable 5/5 on the same workload. That is what
+V12-NEW measures instead.
+
+---
+
+#### V12-NEW — OPERATIVE. Deterministic semantic output, differentially.
+
+Two instruments, both run on **patched and reference** binaries so every number has
+its control beside it. `N = 5`.
+
+```
+# (a) whole-file digest on a 1,200-file AstGen fan-out -- the path 005b changes
+for i in $(seq 5); do $ZIG build-obj -Mroot=<generated 1200-file fixture>; sha256sum <out>; done
+$ZIG build-obj -j1 -Mroot=<same fixture>; sha256sum <out>   # and compare to the above
+
+# (b) .text SECTION digest on a std-pulling workload, where whole-file is known unstable
+for i in $(seq 5); do $ZIG build-obj -Mroot=<std-pulling file>; \
+    objcopy -O binary --only-section=.text <out> - | sha256sum; done
+```
+
+*Expect:* **(a)** 5/5 identical to each other **and** identical to the `-j1` output;
+**(b)** 5/5 identical `.text`. Both must hold for the patched binary, and the
+reference binary must be run alongside so the comparison is visible rather than
+assumed.
+
+Why this is the right instrument and not merely a weaker one: the fan-out fixture
+exercises **exactly the code path the A1 lane split touches** (concurrent AstGen
+across many files), where the original workload exercised the whole compiler and
+was dominated by an unrelated instability. Narrower, and pointed at the claim.
+
+Measured 2026-08-23, and this is the evidence the criterion was adopted on:
+
+| Instrument | Patched | Reference (unpatched) |
+|---|---|---|
+| (a) 1,200-file fan-out, whole file, 5 runs | **5/5 identical** `5b9beb3d…` | 3/3 identical `9d2e3692…` |
+| (a) vs its own `-j1` output | **identical** | identical |
+| (b) std-pulling workload, `.text`, 5 runs | **5/5 identical** `e4d82b55…` | 5/5 identical `5dd21ed9…` |
+| V12-OLD part 1 (whole file, std workload) | 5/5 **different** | 5/5 **different** ← the invalidity proof |
+
+**Stop rule (unchanged in force):** any digest mismatch under (a) or (b) on the
+patched binary that the reference does not also show **stops the split**. The remedy
+is to move `.acquire` back to the top of `workerUpdateFile` and forfeit the wide-lane
+win. Not negotiable by argument; only by a clean run.
+
+---
+
+#### V12-NEW part 2 — the race detector. TSan is UNRUNNABLE; the substitute is named.
+
+**ThreadSanitizer cannot be built in this estate**, and the reason is a header, not a
+policy:
+
+```
+error: sub-compilation of libtsan failed
+  lib/libtsan/sanitizer_common/sanitizer_platform_limits_posix.cpp:160:10:
+    note: 'linux/scc.h' file not found
+```
+
+`linux/scc.h` is an obsolete kernel header Debian's `linux-libc-dev` no longer ships;
+zig 0.16 bundles a compiler-rt vintage that still includes it, at
+`sanitizer_platform_limits_posix.cpp:535-536`, for `sizeof(struct scc_modem)` and
+`sizeof(struct scc_stat)`. **A shim is not lawful here** — TSan asserts on those
+sizes, so shimming means fabricating struct definitions a sanitizer trusts. One was
+built and deliberately not used. Searched the host: no `linux/scc.h` anywhere.
+
+**NAMED SUBSTITUTE: Valgrind Helgrind / DRD, differentially.** Both are present
+(`valgrind-3.27.1`, `helgrind-amd64-linux`, `drd-amd64-linux`) and need **no rebuild**,
+which is what makes them reachable where TSan is not.
+
+**Its limitation, measured before it was adopted, not after:** Helgrind does not model
+Zig's futex-based `Io.Threaded` primitives, so it cannot see most happens-before edges
+and reports enormous false-positive volume. On a trivial `build-obj -j2` with the
+**unpatched promoted** compiler:
+
+```
+ERROR SUMMARY: 146356 errors from 357 contexts (suppressed: 0 from 0)
+   ... at fetchAdd (atomic.zig:53) / Io.Threaded.Future.start (Threaded.zig:761)
+```
+
+So the **absolute count is meaningless** — it fails its own negative control exactly
+as V12-OLD did, and must never be reported as a pass or a fail on its own.
+
+**The instrument is therefore the DIFFERENCE, never the count.** Run patched and
+reference on the identical workload and compare the *set of distinct stack contexts*,
+filtered to frames naming `InternPool`, `Zcu`, or `PerThread` — the structures R12 is
+actually about. A context present for the patched binary and absent for the reference,
+in those files, is the signal. Equal sets are the expected result.
+
+*Expect:* zero `InternPool`/`Zcu`/`PerThread` contexts present in the patched run and
+absent from the reference run.
+
+**Honest statement of strength, owed because this substitutes for a hard gate: this is
+weaker than TSan and does not become TSan by being run.** Helgrind's blindness to the
+synchronisation primitives means it can miss real races, so a clean differential is
+*evidence of absence of new races in the covered paths*, not proof. The positive
+control that would calibrate it is the sabotage build (delete the `.acquire`/`release`
+pair and confirm the differential goes red); until that has been fired, **the
+discrimination of this instrument is UNPROVEN and the row reports so.** A guard never
+seen red is a guard nobody has met.
 
 **V13 — does SMT actually pay on the wide lane, and does `K−2` oversubscription hurt?
 (R10.)**
