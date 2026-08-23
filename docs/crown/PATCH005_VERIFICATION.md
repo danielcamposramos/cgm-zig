@@ -12,6 +12,17 @@ nobody has met.
 
 **Status of every row: UNKNOWN.**
 
+> **SUPERSEDED 2026-08-23 — this batch has RUN.** Per-row verdicts, their evidence lines,
+> and four defects in the list itself (V0a's affinity-blind oracle; V2's `-j1` expectation
+> contradicting the code; the `--time-report` instrument being unobtainable, which sinks
+> V4/V6/V13/V15 as written; V11/V-S1b's byte-identity criterion, which the *unpatched*
+> compiler fails identically) are recorded in
+> [`PATCH005_VERIFICATION_RUN_2026-08-23.md`](PATCH005_VERIFICATION_RUN_2026-08-23.md).
+> The dossier's **V5** (the `Io.Group` fan-out probe for R4) is missing from this file
+> entirely and was run from the dossier instead. **Outcome: promotion REFUSED** — V12 is
+> not passed, and the report line breaks the `zig build` diagnostic channel.
+> Rows still UNKNOWN after that run: V3, V4, V6, V7a, V7b, V14, V-S2a, V-S2b, and HELD H3.
+
 ## What is implemented, and what each piece is worth until its rows fire
 
 | Commit | Piece | Verified today | Gated on |
