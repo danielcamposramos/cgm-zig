@@ -524,6 +524,8 @@ const usage_build_generic =
     \\  -mexec-model=[value]      (WASI) Execution model
     \\  -municode                 (Windows) Use wmain/wWinMain as entry point
     \\  --time-report             Send timing diagnostics to '--listen' clients
+    \\  --time-report-json [path] Write the same timing stats to [path] as JSON.
+    \\                            Implies --time-report and needs no --listen.
     \\
     \\Per-Module Compile Options:
     \\  -target [name]            <arch><sub>-<os>-<abi> see the targets command
@@ -880,6 +882,9 @@ fn buildOutputType(
     var verbose_cimport = false;
     var verbose_llvm_cpu_features = false;
     var time_report = false;
+    // `--time-report-json <path>`: the same numbers `--time-report` sends to a `--listen`
+    // client, written to a file as JSON instead. See the flag's parse site for why.
+    var time_report_json: ?[]const u8 = null;
     var stack_report = false;
     var show_builtin = false;
     var emit_bin: EmitBin = .yes_default_path;
@@ -1468,6 +1473,24 @@ fn buildOutputType(
                     } else if (mem.eql(u8, arg, "--test-no-exec")) {
                         test_no_exec = true;
                     } else if (mem.eql(u8, arg, "--time-report")) {
+                        time_report = true;
+                    } else if (mem.eql(u8, arg, "--time-report-json")) {
+                        // AN INSTRUMENT REPAIR, and it exists because the instrument was
+                        // unobtainable. `--time-report` serialises its numbers only through
+                        // `std.zig.Server`, so it refuses without `--listen`; and routed
+                        // through `zig build --time-report` the build runner opens a
+                        // blocking web server and never exits. The consequence, measured:
+                        // four queued verification rows (V4, V6, V13, V15) could not run at
+                        // all -- not because the compiler lacks the numbers, but because
+                        // there was no way to read them from a script. An instrument that
+                        // only a human with a browser can read is not an instrument.
+                        //
+                        // This adds a second sink for the SAME `Compilation.TimeReport`
+                        // struct the IPC path serialises. No new measurement, no new
+                        // counter, no change to what is measured or when -- purely a
+                        // transport. `--listen` behaviour is untouched, and a stock
+                        // invocation that never passes this flag is byte-identical.
+                        time_report_json = args_iter.nextOrFatal();
                         time_report = true;
                     } else if (mem.eql(u8, arg, "--test-execve")) {
                         test_execve = true;
@@ -3103,8 +3126,12 @@ fn buildOutputType(
         fatal("test-obj requires --test-no-exec", .{});
     }
 
-    if (time_report and listen == .none) {
-        fatal("--time-report requires --listen", .{});
+    // `--time-report` still requires a sink; there are now two of them. Without `--listen`
+    // the IPC sink does not exist, so the refusal stands -- unless `--time-report-json`
+    // named a file sink instead. The refusal text names both, because a refusal that does
+    // not say what would have worked is a refusal an operator has to guess past.
+    if (time_report and listen == .none and time_report_json == null) {
+        fatal("--time-report requires --listen, or --time-report-json <path> to write the same numbers to a file", .{});
     }
 
     if (arg_mode == .translate_c and create_module.c_source_files.items.len != 1) {
@@ -3873,6 +3900,12 @@ fn buildOutputType(
     try comp.makeBinFileExecutable();
     saveState(comp, incremental);
 
+    // The file sink for `--time-report-json`. Placed after the update completes, because
+    // `real_ns_link_flush` and `real_ns_decls` are written during it (`Compilation.zig`
+    // :3446 and :4555) and a report read earlier would report zeros for them and call
+    // that a measurement.
+    if (time_report_json) |json_path| try writeTimeReportJson(comp, io, json_path);
+
     if (switch (arg_mode) {
         .run => true,
         .zig_test => !test_no_exec,
@@ -4305,6 +4338,74 @@ fn saveState(comp: *Compilation, incremental: bool) void {
     if (incremental) {
         comp.saveState() catch |err| warn("unable to save incremental compilation state: {t}", .{err});
     }
+}
+
+/// The file sink for `--time-report-json`: the same `Compilation.TimeReport.stats` the
+/// `--listen` path serialises into `std.zig.Server.Message.TimeReport`, written as JSON.
+///
+/// SCOPE, stated so nobody reads more into this than it does. It emits the STATS HEADER
+/// only -- the thirteen aggregate counters. The IPC message also carries per-decl and
+/// per-file trailing data (`decls_len` names, ns triples) and the LLVM pass timing blob;
+/// those are a profiler's payload, they are large, and no verification row asks for them.
+/// The field `decls_len` below is therefore the COUNT that was available, present so a
+/// reader can tell "no decls" from "decls not emitted here" -- an absent instrument must
+/// report UNKNOWN, and an absent *payload* must at least report its own denominator.
+///
+/// Writing it by hand rather than through a reflection-based serialiser is deliberate:
+/// the field names are a wire format that scripts will grep, and they should change only
+/// when someone types them.
+fn writeTimeReportJson(comp: *Compilation, io: Io, json_path: []const u8) !void {
+    // Non-null: `time_report_json` forces `time_report`, which makes `Compilation.create`
+    // build the struct (`Compilation.zig:2300`).
+    const tr = &comp.time_report.?;
+    const s = tr.stats;
+
+    var file = try Io.Dir.cwd().createFile(io, json_path, .{});
+    defer file.close(io);
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(io, &buffer);
+    const w = &file_writer.interface;
+
+    try w.print(
+        \\{{
+        \\  "schema": "cgm-zig.time-report.v1",
+        \\  "n_reachable_files": {d},
+        \\  "n_imported_files": {d},
+        \\  "n_generic_instances": {d},
+        \\  "n_inline_calls": {d},
+        \\  "cpu_ns_parse": {d},
+        \\  "cpu_ns_astgen": {d},
+        \\  "cpu_ns_sema": {d},
+        \\  "cpu_ns_codegen": {d},
+        \\  "cpu_ns_link": {d},
+        \\  "real_ns_files": {d},
+        \\  "real_ns_decls": {d},
+        \\  "real_ns_llvm_emit": {d},
+        \\  "real_ns_link_flush": {d},
+        \\  "llvm_pass_timings_len": {d},
+        \\  "decls_len": {d},
+        \\  "use_llvm": {}
+        \\}}
+        \\
+    , .{
+        s.n_reachable_files,
+        s.n_imported_files,
+        s.n_generic_instances,
+        s.n_inline_calls,
+        s.cpu_ns_parse,
+        s.cpu_ns_astgen,
+        s.cpu_ns_sema,
+        s.cpu_ns_codegen,
+        s.cpu_ns_link,
+        s.real_ns_files,
+        s.real_ns_decls,
+        s.real_ns_llvm_emit,
+        s.real_ns_link_flush,
+        tr.llvm_pass_timings.len,
+        tr.decl_sema_info.count(),
+        comp.zcu != null and comp.zcu.?.llvm_object != null,
+    });
+    try file_writer.end();
 }
 
 fn serve(
