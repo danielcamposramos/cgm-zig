@@ -329,14 +329,50 @@ in those files, is the signal. Equal sets are the expected result.
 *Expect:* zero `InternPool`/`Zcu`/`PerThread` contexts present in the patched run and
 absent from the reference run.
 
+**THE NOISE FLOOR, MEASURED — because a difference is only a signal above the noise.**
+The signature set is not stable run to run even for a *single unchanged binary*, so
+"any new context is a race" would be a false-positive generator. Measured with
+`partner_tools/helgrind_diff.py`: the **promoted (unpatched) compiler against itself**,
+4 runs of the identical workload, all 6 pairings, counting filtered
+(`InternPool|Zcu|PerThread`) contexts present in one run and absent from the other:
+
+| pairing | filtered A-only | filtered B-only |
+|---|---|---|
+| cal1 vs cal2 | 7 | 5 |
+| cal1 vs cal3 | 3 | 5 |
+| cal1 vs cal4 | 6 | 5 |
+| cal2 vs cal3 | 3 | 7 |
+| cal2 vs cal4 | 3 | 4 |
+| cal3 vs cal4 | 3 | 0 |
+| **range** | **3–7** | **0–7** |
+
+Total context counts across those runs: 343, 339, 353, 343 — themselves varying by 14
+with nothing changed.
+
+**DETECTION THRESHOLD, set from that floor and fixed before the comparison is run: a
+patched-vs-reference filtered difference of ≤ 7 contexts is INDISTINGUISHABLE FROM
+NOISE and must be reported as such, never as a pass and never as a finding.** Only a
+difference materially above 7 — and reproducible across repeats — is signal, and even
+then it is a lead to be read by a human, not a verdict.
+
 **Honest statement of strength, owed because this substitutes for a hard gate: this is
-weaker than TSan and does not become TSan by being run.** Helgrind's blindness to the
-synchronisation primitives means it can miss real races, so a clean differential is
-*evidence of absence of new races in the covered paths*, not proof. The positive
-control that would calibrate it is the sabotage build (delete the `.acquire`/`release`
-pair and confirm the differential goes red); until that has been fired, **the
-discrimination of this instrument is UNPROVEN and the row reports so.** A guard never
-seen red is a guard nobody has met.
+weaker than TSan and does not become TSan by being run.** Two limits, both measured
+rather than supposed:
+
+1. Helgrind's blindness to Zig's futex primitives means it can **miss** real races
+   (false negatives), so a clean differential is *evidence of absence of new races in
+   the covered paths*, not proof of absence.
+2. The 0–7 noise floor means it cannot **see** a small number of new race sites
+   (limited resolution). A single genuinely new race would very likely hide inside it.
+
+**The positive control has NOT been fired.** It is the sabotage build — delete the
+`.acquire`/`release` pair from the import-discovery tail, rebuild, and confirm the
+differential rises decisively above the floor. That needs a stage3 rebuild this lane's
+build budget did not include; the patch and its recipe are prepared under
+`partner_tools/vharness/sabotage/`. **Until it is fired, this instrument's
+discrimination is UNPROVEN and every V12 part-2 result reports so beside its number.**
+A guard never seen red is a guard nobody has met — and this one has now at least been
+measured for how quietly it whispers.
 
 **V13 — does SMT actually pay on the wide lane, and does `K−2` oversubscription hurt?
 (R10.)**
