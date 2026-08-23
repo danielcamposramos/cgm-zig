@@ -89,16 +89,29 @@ $SAFE build-obj -j4 --intern-partitions=2 -Mroot=<same> 2>&1 | head -3
 taskset -c 0-3 $SAFE build-obj -Mroot=<same> 2>&1 | head -3
 $SAFE build-obj --intern-partitions=logical -Mroot=<same> 2>&1 | head -3
 ```
-*Expect:*
+*Expect:* **(item counts UPDATED for the 31-bit `Index`; the `CaptureValue` widening
+doubled every one of them. The pre-widening value is kept in brackets, because a log
+from before the widening is still a valid log and a reader must be able to tell a
+version difference from a defect.)*
+
 1. `topology 6 physical / 12 logical, 2 threads per core (probe: sys_topology)`,
    `workers 12 (derived: logical)`,
    `intern partitions 8 (derived: physical, rounded up to a power of two)`,
-   `alloc lanes 6`, `134,217,727 items per partition` — matching V0a's oracle and the
-   dossier §3.6 ceiling table **to the digit**.
-2. `workers 4 (given)`, `intern partitions 2 (given)`, `536,870,911 items per partition`.
+   `alloc lanes 6`, **`268,435,455 items per partition`** *(was 134,217,727)* — matching
+   V0a's oracle and the dossier §3.6 ceiling table **to the digit**.
+2. `workers 4 (given)`, `intern partitions 2 (given)`, **`1,073,741,823 items per
+   partition`** *(was 536,870,911)*.
 3. **The affinity check, and it blocks 005a if it fails:** `4 physical / 4 logical`,
-   `intern partitions 4`, `268,435,455`. A `6 physical` there is risk R9 firing.
-4. `intern partitions 12 (derived: logical)`, `67,108,863` — the stock-equivalent row.
+   `intern partitions 4`, **`536,870,911`** *(was 268,435,455)*. A `6 physical` there is
+   risk R9 firing.
+4. `intern partitions 12 (derived: logical)`, **`134,217,727`** *(was 67,108,863)* — the
+   stock-equivalent row.
+
+**This row is now doing a second job**, and it is worth naming: it is the only cheap,
+end-to-end check that `ThreadPlan.index_bits` and `InternPool.getIndexMask` agree after
+the widening. If they ever drift apart, the print line reports a ceiling the allocator
+does not honour — and that line is exactly what an operator consults after meeting
+patch/001's named refusal. A wrong ceiling there sends them to the wrong remedy.
 
 **V11 — stock invocations produce identical artifacts.**
 ```
@@ -138,8 +151,20 @@ compiled output, the import is not as lazy as designed.
 ```
 $SAFE build-exe -j1 -Mroot=<small hello world>; echo "exit=$?"
 ```
-*Expect:* exit 0, no hang, report line shows `workers 1`, `intern partitions 2`,
-`536,870,911`. A hang is patch/002 Finding 3 edge 1 (evented tid starvation) resurfacing.
+*Expect:* exit 0, no hang, report line shows `workers 1 (given)`, **`intern partitions 8
+(derived: physical…)`**, **`268,435,455`**. A hang is patch/002 Finding 3 edge 1 (evented
+tid starvation) resurfacing.
+
+**CORRECTED TWICE, and both corrections are the row being wrong rather than the code.**
+This row originally expected `intern partitions 2` and `536,870,911`.
+1. **`-j1` does not set K = 2.** V2 measured K = 8; `ThreadPlan.derive` takes `partitions`
+   from `partitions_arg orelse topology` and `n_jobs` never touches it. The expectation
+   was copied from dossier §3.8's pre-split flag table. See §3.8's own correction note.
+2. **The item count then doubled** with the `CaptureValue` widening (31-bit `Index`).
+
+The behavioural half of the row — *does `-j1` still work* — was GREEN throughout and is
+what the row exists for. `tid_width = 3`, so none of Finding 3's three edges (all at
+`tid_width == 0`) come near. **R8 does not fire.**
 
 **V3 — negative control for R1, the process-global partition invariant.**
 On a scratch copy only: make one sub-compilation site pass `.intern_partitions = 2`
@@ -177,11 +202,18 @@ amended.
 ```
 *Expect, predicted before the run and not adjusted afterward:* the line reports
 `6 physical / 12 logical · workers 12 · intern partitions 8 · alloc lanes 6 ·
-134,217,727 items per partition`; the compile exits 0 with **no patch/001 panic** — the
-incident needed 67,108,864 items on one partition and 134,217,727 is 2.00× that, so the
-margin under test is 2×, not "some"; all six physical cores busy during Sema+codegen and
-all twelve logical during AstGen. **The band, fixed now:** wall time at or below the
-recorded `taskset -c 0-3` PRE, peak RSS within 15% of it.
+268,435,455 items per partition` *(was 134,217,727 before the `CaptureValue` widening)*;
+the compile exits 0 with **no patch/001 panic** — the incident needed 67,108,864 items on
+one partition, so the margin under test is now **4.00×**, up from the 2.00× this row was
+written against. Both numbers are stated because the change in margin is a *result*, not
+a restatement: the topology derivation bought the first 2×, the widening bought the
+second. All six physical cores busy during Sema+codegen and all twelve logical during
+AstGen. **The band, fixed now:** wall time at or below the recorded `taskset -c 0-3` PRE,
+peak RSS within 15% of it.
+
+**This row remains BLOCKED BY CHARTER** — it names a private product this lane may not
+touch — and the margin above is therefore *derived arithmetic*, not a measurement. It is
+UNKNOWN whether the real workload exits 0, and nothing in this file may report otherwise.
 
 **V7b — the other two rows of the same table, on the same compiler.**
 ```

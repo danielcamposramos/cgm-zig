@@ -165,12 +165,25 @@ const max_partitions = @as(usize, std.math.maxInt(Zcu.PerThread.IdBacking)) + 1;
 
 /// The width of an `InternPool.Index` payload once the tid is shifted in.
 ///
-/// This is 30 and not 32 because `CaptureValue` confines an `Index` to `u30` — the
-/// two-bit debt patch/002 priced at 427 sites and declined to pay, and which
-/// `PATCH005_DOSSIER.md` §5 designs around. If that widening ever lands, this constant
-/// moves with it and every ceiling in the report doubles twice over.
-/// Cite: `InternPool.zig:1591-1592` (`getIndexMask`), and patch/001's comment at `:4139`.
-const index_bits = 30;
+/// **This is 31, and it was 30 until the `CaptureValue` widening landed.** The old
+/// comment here read: *"This is 30 and not 32 because `CaptureValue` confines an
+/// `Index` to `u30` — the two-bit debt patch/002 priced and declined to pay"*, and it
+/// predicted *"if that widening ever lands, this constant moves with it and every
+/// ceiling in the report doubles twice over."* The widening landed. The constant moved.
+/// The ceilings doubled **once**, not twice, and the reason is worth inheriting:
+///
+/// `CaptureValue` was the FIRST of two confiners, not the only one. `Air.Inst.Ref`
+/// (`Air.zig:1170-1176`) owns bit 31 as its interned-vs-instruction tag, and both
+/// `Ref.fromIntern` and `ShuffleOneMask` `@intCast` an `Index` down to `u31`. So
+/// freeing `CaptureValue` bought the 31st bit and the 32nd has a different owner —
+/// reclaiming it is an AIR re-representation patch, which is a separate change with a
+/// separate argument, and it is refused by name rather than taken quietly.
+///
+/// Keep this in step with `InternPool.getIndexMask` (`InternPool.zig:1598`), which the
+/// widening moved from `getIndexMask(u30)` to `getIndexMask(u31)` for `Index`. If these
+/// two ever disagree, the report line lies about the ceiling — and the ceiling is
+/// precisely the number an operator consults after meeting patch/001's named refusal.
+const index_bits = 31;
 
 /// Derives the plan from the host and the command line. Never fails: an unprobeable host
 /// falls back to exactly what the compiler did before this file existed.

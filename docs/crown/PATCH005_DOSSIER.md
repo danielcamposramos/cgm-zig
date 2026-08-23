@@ -513,11 +513,14 @@ Rationale for each part, each traceable:
 Owner-supplied and carried as a queued verification item (V7a), **predicted, not
 asserted**:
 
-| Configuration | `physical`/`logical` seen | K | `tid_width` | items/partition | allocating lanes | wide lanes |
-|---|---|---|---|---|---|---|
-| **stock 0.16.0, unpinned** | — (12 logical) | 12 | 4 | **67,108,863** ← the measured cliff, missed by ONE item | 10 | 11 |
-| **current mitigation, `taskset -c 0-3`** | 4 / 4 | 4 | 2 | 268,435,455 | 2 | 3 |
-| **this design, derived** | **6 / 12** | **8** | **3** | **134,217,727** | **6** | **11** |
+Item counts below are stated in **both** index widths, because the `CaptureValue`
+widening landed after this table was written and doubled every one of them (§3.6).
+
+| Configuration | `physical`/`logical` seen | K | `tid_width` | items/partition (31-bit) | *(30-bit, as measured at the incident)* | allocating lanes | wide lanes |
+|---|---|---|---|---|---|---|---|
+| **stock 0.16.0, unpinned** | — (12 logical) | 12 | 4 | 134,217,727 | **67,108,863** ← the measured cliff, missed by ONE item | 10 | 11 |
+| **current mitigation, `taskset -c 0-3`** | 4 / 4 | 4 | 2 | 536,870,911 | 268,435,455 | 2 | 3 |
+| **this design, derived** | **6 / 12** | **8** | **3** | **268,435,455** | 134,217,727 | **6** | **11** |
 
 The derived row is strictly better than *both* existing rows on the axes that
 matter: **2× the capacity headroom of stock and 3× the allocating parallelism of
@@ -525,26 +528,57 @@ the pin, while employing all six physical cores and leaving all twelve logical
 threads available to the wide class.** That is the amendment's claim, and V7a is
 the run that decides whether it survives contact with a real compile.
 
-**And the honest limit of it:** the topology probe helps decisively in the 4–14
-physical-core band and **does not save wide hosts**. A 16-physical-core machine
-derives K = 16 → `tid_width = 4` → 67,108,863 — back at the cliff. A 32-physical
-machine derives 33,554,431. Beyond roughly 14 physical cores, only widening
-`CaptureValue` (§6) adds headroom. Stating this now prevents the design from
-being sold as a general fix.
+**And the honest limit of it — now measurably softer than when this was written.**
+The topology probe helps decisively in the 4–14 physical-core band. Beyond it, the
+probe merely postpones the wall: a 16-physical-core machine derives K = 16 →
+`tid_width = 4` → **134,217,727** (was 67,108,863, i.e. exactly the incident's cliff);
+a 32-physical machine derives **67,108,863** — which is now the cliff the incident hit,
+one host-size later. So the widening bought **one doubling, and therefore roughly one
+octave of host width**, not a general fix.
+
+The original sentence here read *"Beyond roughly 14 physical cores, only widening
+`CaptureValue` (§6) adds headroom."* That widening has now landed and the band moved
+out by a factor of two; the next constraint is `Air.Inst.Ref`'s ownership of bit 31
+(§3.6), and after that there is no bit left in a `u32` — the following lever is a wider
+`Index` type, which is the 427-site rewrite patch/002 refused. **Stating this now still
+prevents the design from being sold as a general fix**, and now also prevents the
+widening from being sold as one.
 
 ### 3.6 The ceiling table, so the print line is checkable
 
-| K (rounded) | `tid_width` | items per partition |
-|---|---|---|
-| 2 | 1 | 536,870,911 |
-| 4 | 2 | 268,435,455 |
-| 8 | 3 | 134,217,727 |
-| 16 | 4 | 67,108,863 ← the cliff a 12-core host lands on today |
-| 32 | 5 | 33,554,431 |
-| 64 | 6 | 16,777,215 |
+**Every number in this table doubled when the `CaptureValue` widening landed.** Both
+tables are kept, because the pre-widening column is what patch/001's production
+refusal was measured against and a reader comparing an old log to a new one needs to
+see why the same K now prints a different ceiling.
 
-Derived from `getIndexMask` (`InternPool.zig:1591-1592`):
-`(2^30 − 1) >> tid_width`.
+| K (rounded) | `tid_width` | items/partition **(current, 31-bit Index)** | items/partition *(pre-widening, 30-bit)* |
+|---|---|---|---|
+| 2 | 1 | **1,073,741,823** | 536,870,911 |
+| 4 | 2 | **536,870,911** | 268,435,455 |
+| 8 | 3 | **268,435,455** | 134,217,727 |
+| 16 | 4 | **134,217,727** | 67,108,863 ← the cliff a 12-core host landed on |
+| 32 | 5 | **67,108,863** | 33,554,431 |
+| 64 | 6 | **33,554,431** | 16,777,215 |
+
+Derived from `getIndexMask` (`InternPool.zig:1598`), which the widening moved from
+`getIndexMask(u30)` to `getIndexMask(u31)` for `Index`: **`(2^31 − 1) >> tid_width`**.
+`src/ThreadPlan.zig`'s `index_bits` constant carries the same 31 and must be kept in
+step with it — if the two disagree, the print line lies about the ceiling, and the
+ceiling is exactly the number an operator reads after meeting patch/001's refusal.
+
+**Only ONE doubling, not two.** §5 predicted the widening would move the ceilings "twice
+over". It moved them once: `CaptureValue` was the first of two confiners, and
+`Air.Inst.Ref` (`Air.zig:1170-1176`) owns bit 31 as its interned-vs-instruction tag, so
+the 32nd bit is an AIR re-representation change and is refused by name rather than taken
+quietly. §5's estimate was made before that second owner was known; it is corrected here
+rather than in place, so the reasoning that produced the wrong number stays legible.
+
+**What this does to the production incident.** The 16-way split that overflowed at
+67,108,864 items now has 134,217,727 available at the same `tid_width = 4` — the
+incident's own workload has **2× headroom on the exact configuration that failed**, and
+the `taskset` interim lever is no longer the only thing standing between this station
+and the refusal. That is the widening's payoff, stated in the units of the incident that
+motivated it rather than in bits.
 
 ### 3.7 The print line — no silent default, ever, and topology on its face
 
