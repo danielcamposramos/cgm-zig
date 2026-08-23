@@ -221,6 +221,35 @@ pub fn update(
             });
         }
 
+        // ORDER 2, level 3: the one level at which "smallest parts first" is literally
+        // true. AstGen has NO cross-file dependencies -- it is pure per file -- so
+        // reordering this list is semantically free, and all it decides is who starts
+        // first and, past the async limit, who runs inline on the spawner.
+        //
+        // The rank is looked up through `zcu.module_roots` rather than through
+        // `File.mod`, and that is not a shortcut: `File.mod` is still `null` for EVERY
+        // file at this point. `populateModuleRootTable` creates root files with
+        // `.mod = null` (`:2652`) and it is `computeAliveFiles`, which runs AFTER this
+        // whole group is awaited, that stamps module membership. So the only files
+        // rankable here are the module roots, which is exactly the first wave of a fresh
+        // build: one file per module, ordered leaf-module-first. Everything else keeps
+        // discovery order behind them, and the sort is STABLE so that order is preserved.
+        if (zcu.analysis_order == .layered) rank: {
+            const ranking = zcu.module_ranking orelse break :rank;
+            var root_rank: std.AutoHashMapUnmanaged(Zcu.File.Index, Zcu.ModuleRanking.Rank) = .empty;
+            defer root_rank.deinit(gpa);
+            try root_rank.ensureTotalCapacity(gpa, @intCast(zcu.module_roots.count()));
+            var it = zcu.module_roots.iterator();
+            while (it.next()) |entry| {
+                const root_index = entry.value_ptr.unwrap() orelse continue;
+                root_rank.putAssumeCapacity(root_index, ranking.get(entry.key_ptr.*));
+            }
+            astgen_work_items.sort(AstGenOrder{
+                .file_indices = astgen_work_items.items(.file_index),
+                .root_rank = &root_rank,
+            });
+        }
+
         // Now that we're not going to touch `zcu.import_table` again, we can spawn `workerUpdateFile` jobs.
         for (astgen_work_items.items(.file_index), astgen_work_items.items(.file)) |file_index, file| {
             astgen_group.async(io, workerUpdateFile, .{
@@ -382,6 +411,21 @@ pub fn update(
         };
     }
 }
+/// Orders the AstGen spawn list by module composition depth. See the call site for why
+/// the rank comes from `module_roots` rather than from `File.mod`.
+const AstGenOrder = struct {
+    /// The live `file_index` column, permuted in place by the sort alongside everything
+    /// else; indices are always current positions, which is the `sort` contract.
+    file_indices: []const Zcu.File.Index,
+    root_rank: *const std.AutoHashMapUnmanaged(Zcu.File.Index, Zcu.ModuleRanking.Rank),
+
+    pub fn lessThan(ctx: AstGenOrder, a_index: usize, b_index: usize) bool {
+        const a = ctx.root_rank.get(ctx.file_indices[a_index]) orelse return false;
+        const b = ctx.root_rank.get(ctx.file_indices[b_index]) orelse return true;
+        return Zcu.ModuleRanking.before(a, 0, b, 0);
+    }
+};
+
 fn workerUpdateBuiltinFile(comp: *Compilation, file: *Zcu.File) void {
     Builtin.updateFileOnDisk(file, comp) catch |err| comp.lockAndSetMiscFailure(
         .write_builtin_zig,

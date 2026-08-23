@@ -455,6 +455,12 @@ const usage_build_generic =
     \\  -h, --help                Print this help and exit
     \\  --color [auto|off|on]     Enable or disable colored error messages
     \\  -j<N>                     Limit concurrent workers (default: all logical CPUs)
+    \\  --analysis-order=[insertion|layered]
+    \\                            Priority among units that are ready to analyze.
+    \\                            insertion (default): upstream order. layered: module
+    \\                            dependency depth ascending, fan-in descending, a
+    \\                            module's internal files before its root file. Never
+    \\                            changes which units are analyzed, only when.
     \\  --intern-partitions=[N|logical]
     \\                            InternPool partition count (default: physical cores,
     \\                            rounded up to a power of two). Fewer partitions means
@@ -1060,6 +1066,10 @@ fn buildOutputType(
     // worker count and the `InternPool` partition count because they were one integer;
     // now `-j` means workers and this means partitions. See `src/ThreadPlan.zig`.
     var intern_partitions: ?ThreadPlan.PartitionsArg = null;
+    // ORDER 2 inside the compilation. Default `.insertion` -- upstream's behaviour --
+    // until queued item V8 measures the layered member's selection overhead. See
+    // `Zcu.AnalysisOrder`.
+    var analysis_order: Zcu.AnalysisOrder = .insertion;
 
     switch (arg_mode) {
         .build, .translate_c, .zig_test, .zig_test_obj, .run => {
@@ -1203,6 +1213,9 @@ fn buildOutputType(
                             }
                             intern_partitions = .{ .count = num };
                         }
+                    } else if (mem.cutPrefix(u8, arg, "--analysis-order=")) |str| {
+                        analysis_order = std.meta.stringToEnum(Zcu.AnalysisOrder, str) orelse
+                            fatal("expected [insertion|layered] after '--analysis-order=', found '{s}'", .{str});
                     } else if (mem.eql(u8, arg, "--subsystem")) {
                         subsystem = try parseSubsystem(args_iter.nextOrFatal());
                     } else if (mem.eql(u8, arg, "-O")) {
@@ -3601,6 +3614,7 @@ fn buildOutputType(
     const comp = Compilation.create(gpa, arena, io, &create_diag, .{
         .dirs = dirs,
         .thread_limit = thread_limit,
+        .analysis_order = analysis_order,
         .self_exe_path = switch (native_os) {
             .wasi => null,
             else => self_exe_path,

@@ -112,6 +112,26 @@ builtin_modules: std.AutoArrayHashMapUnmanaged(Cache.BinDigest, *Package.Module)
 /// Modules whose root file is not a Zig or ZON file have the value `.none`.
 module_roots: std.AutoArrayHashMapUnmanaged(*Package.Module, File.Index.Optional) = .empty,
 
+/// ORDER 2's input: composition depth and fan-in per module, computed once at "Site A"
+/// in `Compilation.create` (right after `module_roots` is complete and before any
+/// analysis has run) into the compilation's arena. `null` unless
+/// `--analysis-order=layered` asked for it, so a stock compilation does not pay for a
+/// walk it will never read. See `Compilation/ModuleRanking.zig`.
+module_ranking: ?ModuleRanking = null,
+
+/// Memoises the `AnalUnit -> file -> module -> Rank` chase, keyed by file.
+///
+/// The chase itself is several hops (`TrackedInst.Index` -> `resolveFile` -> `File` ->
+/// `.mod`), and the selection it feeds runs once per `AnalUnit` — potentially millions of
+/// times on a large compilation. Memoising per FILE rather than per unit is what keeps
+/// the priority from becoming the bottleneck it exists to relieve. Written only from the
+/// main semantic-analysis thread, which is the only caller of
+/// `findOutdatedToAnalyze`.
+file_rank_memo: std.AutoHashMapUnmanaged(File.Index, ModuleRanking.FileRank) = .empty,
+
+/// Which member of ORDER 2 the in-compilation scheduler runs. See `AnalysisOrder`.
+analysis_order: AnalysisOrder = .insertion,
+
 /// The set of all the Zig source files in the Zig Compilation Unit. Tracked in
 /// order to iterate over it and check which source files have been modified on
 /// the file system when an update is requested, as well as to cache `@import`
@@ -402,6 +422,24 @@ pub const IncrementalDebugState = struct {
 };
 
 pub const PerThread = @import("Zcu/PerThread.zig");
+pub const ModuleRanking = @import("Compilation/ModuleRanking.zig");
+
+/// ORDER 2 inside one compilation: which of the units that are ready to analyse goes
+/// next. Both members are always reachable; the flag exists so the choice is settled by
+/// measurement rather than taste.
+pub const AnalysisOrder = enum {
+    /// Insertion order — `outdated_ready.funcs.keys()[0]`, exactly as upstream. THE
+    /// DEFAULT, and deliberately so: the layered member turns an O(1) pick into an O(n)
+    /// scan, `findOutdatedToAnalyze` is called once per `AnalUnit`, and no measurement of
+    /// that trade exists yet. Queued item V8 measures `cpu_ns_sema` under both; the
+    /// default flips only if layered wins, and the feature does not ship as a default if
+    /// it is net-negative.
+    insertion,
+    /// Module composition depth ascending, module fan-in descending, a module's internal
+    /// files before its public root file, insertion order last. Never changes WHICH units
+    /// are analysed — only which ready one goes first.
+    layered,
+};
 
 pub const ImportTableAdapter = struct {
     zcu: *const Zcu,
@@ -2869,6 +2907,7 @@ pub fn deinit(zcu: *Zcu) void {
 
         zcu.builtin_modules.deinit(gpa);
         zcu.module_roots.deinit(gpa);
+        zcu.file_rank_memo.deinit(gpa);
         for (zcu.import_table.keys()) |file_index| {
             pt.destroyFile(file_index);
         }
@@ -3307,6 +3346,84 @@ fn markTransitiveDependersPotentiallyOutdated(zcu: *Zcu, maybe_outdated: AnalUni
     }
 }
 
+/// Index of the ready unit to analyse next.
+///
+/// `.insertion` is `0` -- upstream's pick, O(1), and the default. `.layered` is an argmin
+/// over the ready tier by `(module depth ASC, module fan-in DESC, internal-before-facade,
+/// insertion ASC)`.
+///
+/// **The O(n) scan is this feature's whole cost, and it is not hand-waved.** This is
+/// called once per `AnalUnit` -- potentially millions of times on a large compilation --
+/// so an argmin over the ready set is O(n) where upstream is O(1). Two things bound it:
+/// the ready tier is the units whose dependencies are already satisfied, not the whole
+/// outdated set; and the per-unit `AnalUnit -> file -> module` chase is memoised per FILE
+/// in `zcu.file_rank_memo`, so the scan is a handful of hash lookups rather than a
+/// pointer walk each. Whether that is enough is a MEASUREMENT, not an opinion: queued
+/// item V8 compares `cpu_ns_sema` under both members on the same workload, and `layered`
+/// does not become the default unless it wins. Until then this code is unreachable
+/// without the flag.
+fn readyPick(zcu: *Zcu, keys: anytype) usize {
+    if (zcu.analysis_order == .insertion) return 0;
+    if (zcu.module_ranking == null) return 0;
+    var best: usize = 0;
+    var best_rank = zcu.analUnitFileRank(toAnalUnit(keys[0]));
+    for (keys[1..], 1..) |key, i| {
+        const r = zcu.analUnitFileRank(toAnalUnit(key));
+        if (ModuleRanking.before(r.rank, r.facade, best_rank.rank, best_rank.facade)) {
+            best = i;
+            best_rank = r;
+        }
+    }
+    return best;
+}
+
+/// `outdated_ready.funcs` is keyed by the function's `InternPool.Index`; `.other` is
+/// keyed by `AnalUnit` directly. One comparator, two key types.
+fn toAnalUnit(key: anytype) AnalUnit {
+    return switch (@TypeOf(key)) {
+        AnalUnit => key,
+        InternPool.Index => .wrap(.{ .func = key }),
+        else => @compileError("unsupported outdated_ready key type " ++ @typeName(@TypeOf(key))),
+    };
+}
+
+/// Resolves a unit to the rank of the module owning its source file, memoised per file.
+///
+/// The chase differs per unit kind and three kinds have no source position to chase:
+/// `type_layout` and `struct_defaults` are resolved from an interned type rather than
+/// from a declaration site, and `memoized_state` belongs to no file at all. Those report
+/// UNKNOWN and sort last, which is the conservative choice -- treating an unlocatable
+/// unit as a leaf would promote it past every unit that was actually ranked.
+fn analUnitFileRank(zcu: *Zcu, unit: AnalUnit) ModuleRanking.FileRank {
+    const ip = &zcu.intern_pool;
+    const file_index: File.Index = switch (unit.unwrap()) {
+        .nav_val, .nav_ty => |nav| zcu.navFileScopeIndex(nav),
+        .func => |func| zcu.navFileScopeIndex(zcu.funcInfo(func).owner_nav),
+        .@"comptime" => |cu| ip.getComptimeUnit(cu).zir_index.resolveFile(ip),
+        .type_layout, .struct_defaults, .memoized_state => return .unknown,
+    };
+    return zcu.fileRank(file_index);
+}
+
+fn fileRank(zcu: *Zcu, file_index: File.Index) ModuleRanking.FileRank {
+    if (zcu.file_rank_memo.get(file_index)) |r| return r;
+    const ranking = zcu.module_ranking.?;
+    const file = zcu.fileByIndex(file_index);
+    // `File.mod` is null until `computeAliveFiles` stamps it. A file analysed before it
+    // was stamped is unlocatable, not a leaf.
+    const mod = file.mod orelse return .unknown;
+    const root = zcu.module_roots.get(mod) orelse File.Index.Optional.none;
+    const result: ModuleRanking.FileRank = .{
+        .rank = ranking.get(mod),
+        .facade = if (root.unwrap() == file_index) 1 else 0,
+    };
+    // Memoisation is an optimisation, not a correctness requirement: if the put fails we
+    // still return the right answer, just more slowly. Refusing to compile because a
+    // cache could not grow would be the wrong trade in a priority heuristic.
+    zcu.file_rank_memo.put(zcu.gpa, file_index, result) catch {};
+    return result;
+}
+
 /// Selects an outdated `AnalUnit` to analyze next. Called from the main semantic analysis loop when
 /// there is no work immediately queued. The unit is chosen such that it is unlikely to require any
 /// recursive analysis (all of its previously-marked dependencies are already up-to-date), because
@@ -3318,14 +3435,24 @@ pub fn findOutdatedToAnalyze(zcu: *Zcu) Allocator.Error!?AnalUnit {
     // TODO: perhaps we should also experiment with *avoiding* functions if the codegen/link queue
     // is backed up (for instance due to a very large function). That could help minimize blocking
     // on the main thread in `CodegenTaskPool.start` waiting for the linker to catch up.
+    //
+    // ORDER 2, level (b): the two-tier shape above is UNCHANGED -- functions still come
+    // before everything else, because that tier exists to feed codegen and the linker and
+    // ORDER 1 wants those lanes fed harder, not less. What `--analysis-order=layered`
+    // changes is only the `[0]`: which member of the ready tier is picked. It cannot
+    // change WHICH units get analysed, only when, so it is free of semantic consequence
+    // by construction -- see `Compilation/ModuleRanking.zig` for why that distinction is
+    // the whole of what "edges first" can lawfully mean inside a compilation.
     if (zcu.outdated_ready.funcs.count() > 0) {
-        const unit: AnalUnit = .wrap(.{ .func = zcu.outdated_ready.funcs.keys()[0] });
+        const keys = zcu.outdated_ready.funcs.keys();
+        const unit: AnalUnit = .wrap(.{ .func = keys[zcu.readyPick(keys)] });
         log.debug("findOutdatedToAnalyze: {f}", .{zcu.fmtAnalUnit(unit)});
         return unit;
     }
 
     if (zcu.outdated_ready.other.count() > 0) {
-        const unit = zcu.outdated_ready.other.keys()[0];
+        const keys = zcu.outdated_ready.other.keys();
+        const unit = keys[zcu.readyPick(keys)];
         log.debug("findOutdatedToAnalyze: {f}", .{zcu.fmtAnalUnit(unit)});
         return unit;
     }

@@ -116,6 +116,9 @@ pub fn main(init: process.Init.Minimal) !void {
     var error_style: ErrorStyle = .verbose;
     var multiline_errors: MultilineErrors = .indent;
     var summary: ?Summary = null;
+    // ORDER 2 at the step level. The derived default is `layered`; `random` (today's
+    // behaviour) and `declared` stay reachable by name. See `StepOrder`.
+    var step_order: StepOrder = .layered;
     var max_rss: u64 = 0;
     var skip_oom_steps = false;
     var test_timeout_ns: ?u64 = null;
@@ -267,6 +270,9 @@ pub fn main(init: process.Init.Minimal) !void {
                         arg, next_arg,
                     });
                 };
+            } else if (mem.cutPrefix(u8, arg, "--step-order=")) |text| {
+                step_order = std.meta.stringToEnum(StepOrder, text) orelse
+                    fatalWithHint("expected [layered|random|declared] after '--step-order=', found '{s}'", .{text});
             } else if (mem.eql(u8, arg, "--seed")) {
                 const next_arg = nextArg(args, &arg_idx) orelse
                     fatalWithHint("expected u32 after '{s}'", .{arg});
@@ -532,7 +538,7 @@ pub fn main(init: process.Init.Minimal) !void {
         run.max_rss_is_default = true;
     }
 
-    prepare(arena, builder, targets.items, &run, graph.random_seed) catch |err| switch (err) {
+    prepare(arena, builder, targets.items, &run, graph.random_seed, step_order) catch |err| switch (err) {
         error.DependencyLoopDetected, error.InsufficientMemory => {
             // Perhaps in the future there could be an Advanced Options flag
             // such as --debug-build-runner-leaks which would make this code
@@ -686,6 +692,7 @@ fn prepare(
     step_names: []const []const u8,
     run: *Run,
     seed: u32,
+    step_order: StepOrder,
 ) !void {
     const gpa = run.gpa;
     const step_stack = &run.step_stack;
@@ -708,10 +715,46 @@ fn prepare(
 
     var rng = std.Random.DefaultPrng.init(seed);
     const rand = rng.random();
-    rand.shuffle(*Step, starting_steps);
+    const maybe_rand: ?std.Random = switch (step_order) {
+        .random => rand,
+        .layered, .declared => null,
+    };
+    if (maybe_rand) |r| r.shuffle(*Step, starting_steps);
 
     for (starting_steps) |s| {
-        try constructGraphAndCheckForDependencyLoop(gpa, b, s, &run.step_stack, rand);
+        try constructGraphAndCheckForDependencyLoop(gpa, b, s, &run.step_stack, maybe_rand);
+    }
+
+    // ORDER 2, level (a): "it must compile from the smallest to the most composed part
+    // -- so it starts with edges, when doing a full build."
+    //
+    // The topological constraint is already enforced by `pending_deps`; the only freedom
+    // left is the order among steps whose dependencies are ALL already met, and upstream
+    // spends that freedom on randomisation. This spends it on layering instead --
+    // shallowest first, and within a depth the most-depended-upon first, so finishing a
+    // step converts the largest number of `pending_deps` counters to zero and makes the
+    // largest number of new steps eligible.
+    // The chosen order is PRINTED, always and in one line -- a derived default nobody can
+    // see is a derived default nobody can debug, and a `--summary` that got faster for
+    // unexplained reasons is worse than one that did not.
+    switch (step_order) {
+        .layered => {
+            const max_depth = try applyLayeredOrder(gpa, run);
+            std.log.info(
+                "step order layered (derived: dependency depth ascending, fan-in " ++
+                    "descending); {d} steps, max depth {d}; --step-order=random restores " ++
+                    "the shuffle (keep a CI lane on it -- it fuzzes for missing edges)",
+                .{ step_stack.count(), max_depth },
+            );
+        },
+        .random => std.log.info(
+            "step order random (given; --seed {d}); independent steps shuffled",
+            .{seed},
+        ),
+        .declared => std.log.info(
+            "step order declared (given); dependencies traversed as build.zig wrote them",
+            .{},
+        ),
     }
 
     {
@@ -1247,6 +1290,142 @@ fn printTreeStep(
     }
 }
 
+/// ORDER 2 at the step level: which of the steps that are ready to run goes first.
+///
+/// The topological constraint is not a choice -- a step cannot start until `pending_deps`
+/// hits zero (`makeStep`) -- so the ONLY freedom in the whole schedule is the order among
+/// steps whose dependencies are already met. Upstream spends that freedom on
+/// randomisation, deliberately; this fork adds a member that spends it on layering, and
+/// keeps randomisation reachable by name.
+const StepOrder = enum {
+    /// Dependency depth ASCENDING, fan-in DESCENDING within a depth, name ascending to
+    /// break remaining ties. Deterministic.
+    ///
+    /// "Depth ascending" is the owner's order read literally: the smallest parts -- the
+    /// ones that compose the bigger ones -- go first. "Fan-in descending" is the claim
+    /// that among equally-deep steps, finishing the most-depended-upon one converts the
+    /// most `pending_deps` counters to zero, makes the most new steps eligible, and so
+    /// keeps the widest part of the worker pool fed.
+    ///
+    /// **That tie-break is a CLAIM, not a measurement, and the counter-claim is real:** a
+    /// high-fan-in step may also be the longest, and starting it first can leave the pool
+    /// idle at the tail. The honest resolution is a critical-path order
+    /// `(depth ASC, remaining_critical_path DESC)` computed from measured per-step
+    /// durations -- and the build runner already measures `result_duration_ns` and
+    /// `result_peak_rss` (`lib/std/Build/Step.zig:662`, `:455`) and throws them away at
+    /// exit. Until a ledger persists them, fan-in is the best proxy available and this
+    /// flag exists so the question is settled by data rather than by taste. Queued item
+    /// V10 is that run.
+    layered,
+    /// Upstream's behaviour, seeded by `--seed`: shuffle the traversal so both
+    /// `step_stack` and every `dependants` list come out in random order.
+    ///
+    /// **Not deprecated, and it must not be.** The randomisation is a working fuzzer for
+    /// missing dependency edges: a project that only ever runs `layered` will stop
+    /// finding them, because a deterministic order can satisfy an undeclared dependency
+    /// by luck every single time. The recommendation that ships with this change is that
+    /// CI keeps a `--step-order=random` lane.
+    random,
+    /// No reordering at any level: dependencies are traversed exactly as `build.zig`
+    /// wrote them. The control member -- neither randomised nor ranked -- for telling
+    /// "layered helped" apart from "anything deterministic helped".
+    declared,
+};
+
+/// Depth and fan-in for one step. 8 bytes, arena-allocated, discarded after the sort.
+const StepRank = struct {
+    /// Longest path from this step down to a leaf, over `Step.dependencies`. Leaves are
+    /// 0. This is the "compose order" the charter names: everything at depth `d` can
+    /// only be built from things at depths `< d`.
+    depth: u32,
+    /// In-degree: how many steps are waiting on this one. Free -- `dependants` is already
+    /// built by `constructGraphAndCheckForDependencyLoop`.
+    fan_in: u32,
+};
+
+/// Ranks every step and applies the order in the two places it can matter: the set of
+/// initially-ready steps (which `runSteps` takes from `step_stack` in order) and each
+/// step's `dependants` list (which `makeStep` walks when it unblocks its successors).
+///
+/// Called only after `constructGraphAndCheckForDependencyLoop` has returned successfully
+/// for every root, which means the graph is a proven DAG -- that function's entire job is
+/// to refuse `error.DependencyLoopDetected`. The depth walk below therefore cannot cycle,
+/// and it does not carry cycle-tolerance code that could never be exercised or tested.
+fn applyLayeredOrder(gpa: Allocator, run: *Run) Allocator.Error!u32 {
+    var ranks: std.AutoHashMapUnmanaged(*Step, StepRank) = .empty;
+    defer ranks.deinit(gpa);
+    try ranks.ensureTotalCapacity(gpa, @intCast(run.step_stack.count()));
+
+    var max_depth: u32 = 0;
+    for (run.step_stack.keys()) |s| {
+        const d = try stepDepth(gpa, s, &ranks);
+        max_depth = @max(max_depth, d);
+    }
+    // Fan-in is filled in a second pass because `depth` must be memoised before any entry
+    // is complete; `getPtr` cannot fail here, every step was just visited.
+    for (run.step_stack.keys()) |s| {
+        ranks.getPtr(s).?.fan_in = @intCast(s.dependants.items.len);
+    }
+
+    const ranks_ptr: *const std.AutoHashMapUnmanaged(*Step, StepRank) = &ranks;
+
+    // Ordering `step_stack` is what orders the INITIAL ready set: `runSteps` collects it
+    // by walking `step_stack.keys()` in order. `lessThan` reads the live keys slice by
+    // current index, which is exactly the `sort` contract, and sorting never reallocates.
+    run.step_stack.sort(LayeredOrder{ .ranks = ranks_ptr, .steps = run.step_stack.keys() });
+
+    // And ordering each `dependants` list is what orders every SUBSEQUENT ready step:
+    // `makeStep` walks that list when its own work finishes and spawns whichever
+    // dependants it just unblocked.
+    for (run.step_stack.keys()) |s| {
+        std.mem.sort(*Step, s.dependants.items, ranks_ptr, LayeredOrder.lessThanStep);
+    }
+
+    return max_depth;
+}
+
+fn stepDepth(
+    gpa: Allocator,
+    s: *Step,
+    ranks: *std.AutoHashMapUnmanaged(*Step, StepRank),
+) Allocator.Error!u32 {
+    if (ranks.get(s)) |r| return r.depth;
+    var depth: u32 = 0;
+    for (s.dependencies.items) |dep| {
+        depth = @max(depth, try stepDepth(gpa, dep, ranks) + 1);
+    }
+    // `fan_in` is filled by the caller's second pass; `depth` is what memoises the walk.
+    try ranks.put(gpa, s, .{ .depth = depth, .fan_in = 0 });
+    return depth;
+}
+
+const LayeredOrder = struct {
+    ranks: *const std.AutoHashMapUnmanaged(*Step, StepRank),
+    steps: []const *Step,
+
+    /// `std.AutoArrayHashMapUnmanaged.sort` contract.
+    pub fn lessThan(ctx: LayeredOrder, a_index: usize, b_index: usize) bool {
+        return order(ctx.ranks, ctx.steps[a_index], ctx.steps[b_index]);
+    }
+
+    /// `std.mem.sort` contract, for the `dependants` lists.
+    fn lessThanStep(ranks: *const std.AutoHashMapUnmanaged(*Step, StepRank), a: *Step, b: *Step) bool {
+        return order(ranks, a, b);
+    }
+
+    fn order(ranks: *const std.AutoHashMapUnmanaged(*Step, StepRank), a: *Step, b: *Step) bool {
+        // A step reachable only as a dependant of something outside `step_stack` has no
+        // rank. Sorting it last is the conservative choice: an unranked step is one this
+        // pass knows nothing about, and guessing it is a leaf would promote it past
+        // steps that were actually measured.
+        const ra = ranks.get(a) orelse return false;
+        const rb = ranks.get(b) orelse return true;
+        if (ra.depth != rb.depth) return ra.depth < rb.depth;
+        if (ra.fan_in != rb.fan_in) return ra.fan_in > rb.fan_in;
+        return std.mem.order(u8, a.name, b.name) == .lt;
+    }
+};
+
 /// Traverse the dependency graph depth-first and make it undirected by having
 /// steps know their dependants (they only know dependencies at start).
 /// Along the way, check that there is no dependency loop, and record the steps
@@ -1263,7 +1442,11 @@ fn constructGraphAndCheckForDependencyLoop(
     b: *std.Build,
     s: *Step,
     step_stack: *std.AutoArrayHashMapUnmanaged(*Step, void),
-    rand: std.Random,
+    /// `null` under `--step-order=layered` and `--step-order=declared`: the traversal
+    /// order is then decided after the graph is whole, by `applyLayeredOrder`, or left
+    /// exactly as `build.zig` declared it. Non-null restores the upstream behaviour the
+    /// doc comment above describes, and `--step-order=random` is how you ask for it.
+    rand: ?std.Random,
 ) !void {
     switch (s.state) {
         .precheck_started => {
@@ -1280,7 +1463,7 @@ fn constructGraphAndCheckForDependencyLoop(
             const deps = gpa.dupe(*Step, s.dependencies.items) catch @panic("OOM");
             defer gpa.free(deps);
 
-            rand.shuffle(*Step, deps);
+            if (rand) |r| r.shuffle(*Step, deps);
 
             for (deps) |dep| {
                 try step_stack.put(gpa, dep, {});
@@ -1676,6 +1859,14 @@ fn printUsage(b: *std.Build, w: *Writer) !void {
         \\  --zig-lib-dir [arg]          Override path to Zig lib directory
         \\  --build-runner [file]        Override path to build runner
         \\  --seed [integer]             For shuffling dependency traversal order (default: random)
+        \\  --step-order=[layered|random|declared]
+        \\                               Order among steps whose dependencies are all met.
+        \\                               layered (default): dependency depth ascending,
+        \\                               fan-in descending -- shallowest and
+        \\                               most-depended-upon first. random: shuffle, seeded
+        \\                               by --seed; a working fuzzer for missing dependency
+        \\                               edges, so keep a CI lane on it. declared: the order
+        \\                               written in build.zig.
         \\  --build-id[=style]           At a minor link-time expense, embeds a build ID in binaries
         \\      fast                     8-byte non-cryptographic hash (COFF, ELF, WASM)
         \\      sha1, tree               20-byte cryptographic hash (ELF, WASM)

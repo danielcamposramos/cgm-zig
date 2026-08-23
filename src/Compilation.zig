@@ -1610,6 +1610,9 @@ pub const CreateOptions = struct {
     /// smaller is refused by name in `Zcu.init`; queued item V3 is that refusal's
     /// negative control.
     intern_partitions: ?usize = null,
+    /// ORDER 2 inside this compilation. `.insertion` is upstream's behaviour and the
+    /// default; see `Zcu.AnalysisOrder`.
+    analysis_order: Zcu.AnalysisOrder = .insertion,
     self_exe_path: ?[]const u8 = null,
 
     /// Options that have been resolved by calling `resolveDefaults`.
@@ -2244,6 +2247,7 @@ pub fn create(gpa: Allocator, arena: Allocator, io: Io, diag: *CreateDiagnostic,
                 .analysis_roots_buffer = undefined,
                 .analysis_roots_len = 0,
                 .codegen_task_pool = try .init(arena),
+                .analysis_order = options.analysis_order,
             };
             // The (K, M_wide) split lands here: the pool is sized by the PARTITION
             // count, not by the worker count. They were the same integer until
@@ -2365,6 +2369,20 @@ pub fn create(gpa: Allocator, arena: Allocator, io: Io, diag: *CreateDiagnostic,
             if (comp.emit_module_graph != null) {
                 dev.check(.module_graph_emit);
                 comp.module_graph_json = try EmitModuleGraph.buildJson(arena, comp, zcu);
+            }
+
+            // ORDER 2's input, computed at the same instant and for the same reason: the
+            // module graph is complete and no analysis has run. Only under
+            // `--analysis-order=layered`, so a stock compilation does not pay an O(V+E)
+            // walk whose result it will never read.
+            if (zcu.analysis_order == .layered) {
+                const ranking: Zcu.ModuleRanking = try .build(arena, zcu);
+                zcu.module_ranking = ranking;
+                std.log.info(
+                    "analysis order layered (given): {d} modules ranked, max depth {d}, " ++
+                        "{d} in import cycles; --analysis-order=insertion restores the default",
+                    .{ zcu.module_roots.count(), ranking.max_depth, ranking.cyclic_count },
+                );
             }
         }
 
