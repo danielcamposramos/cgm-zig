@@ -29,6 +29,13 @@ global_error_set: GlobalErrorSet,
 /// Cached number of active bits in a `tid`.
 tid_width: if (single_threaded) u0 else std.math.Log2Int(u32),
 /// Cached shift amount to put a `tid` in the top bits of a 30-bit value.
+///
+/// cgm-zig PATCH 005: **this field now has no reader.** Its only consumer was
+/// `Index.Unwrapped.wrap`/`unwrap`, and those moved to `tid_shift_31` when the
+/// `CaptureValue` widening freed `Index` from its 30-bit confinement. It is kept
+/// (still computed in `init`) rather than deleted so the diff against upstream stays
+/// minimal and a future rebase does not have to re-add it — but nothing reads it, and
+/// anything that starts reading it again is reintroducing the 30-bit ceiling.
 tid_shift_30: if (single_threaded) u0 else std.math.Log2Int(u32),
 /// Cached shift amount to put a `tid` in the top bits of a 31-bit value.
 tid_shift_31: if (single_threaded) u0 else std.math.Log2Int(u32),
@@ -1922,16 +1929,81 @@ pub const OptionalNullTerminatedString = enum(u32) {
 /// * comptime-known value (where we store the value)
 /// * `Nav` val (so that we can analyze the value lazily)
 /// * `Nav` ref (so that we can analyze the reference lazily)
-pub const CaptureValue = packed struct(u32) {
-    tag: enum(u2) { @"comptime", runtime, nav_val, nav_ref },
-    idx: u30,
+///
+/// cgm-zig PATCH 005 -- CaptureValue widening. WHAT THIS USED TO BE, and why it lost:
+///
+///     pub const CaptureValue = packed struct(u32) {
+///         tag: enum(u2) { @"comptime", runtime, nav_val, nav_ref },
+///         idx: u30,                       // <-- @intCast(@intFromEnum(i))
+///     };
+///
+/// One `u32` word per capture, bought by confining the payload to 30 bits. The payload
+/// is an `InternPool.Index` or a `Nav.Index`, and BOTH are `enum(u32)`, so the u30 field
+/// was paying for its compactness twice:
+///
+///  1. It capped the whole `Index` space at 2^30, which `init` then splits `tid_width`
+///     ways -- so per-partition capacity was `2^30 >> tid_width`, i.e. 67,108,863 items
+///     at a 16-way split. patch/001's named refusal fired on that ceiling in production.
+///     `Index.Unwrapped.wrap` below now encodes at 31 bits — 2x headroom. It is 31 and
+///     not 32 because `Air.Inst.Ref` independently reserves the top bit; that second
+///     confiner is documented in full at `Index.Unwrapped.wrap`.
+///  2. `Nav.Index` genuinely spans all 32 bits (`Nav.Index.Unwrapped.wrap` shifts the tid
+///     in at `tid_shift_32`), so `@intCast` on the `.nav_val`/`.nav_ref` arms TRUNCATED
+///     any captured `Nav` living on a tid whose encoded value reached bit 30 or 31 --
+///     tid >= 4 at `tid_width = 4`. A safety panic in a checked build, a silently wrong
+///     `Nav.Index` in the shipped ReleaseFast compiler. That was a live latent defect,
+///     not a hypothetical; it is abolished here by construction rather than by an assert.
+///
+/// The replacement is an `extern struct` of two `u32` words -- payload word, tag word --
+/// chosen over a `packed struct(u64)` because the `extra` array is `[]u32` and a
+/// u64-backed packed struct demands 8-byte alignment that `extra` cannot promise. This
+/// shape is 4-byte aligned by construction, so `Slice.get` and the `@ptrCast` encode
+/// sites keep reinterpreting `extra` storage in place with no `@alignCast` anywhere.
+/// The price is one extra `u32` word per capture; see `extra_words`.
+///
+/// A single value captured in the closure of a namespace type. This is not a plain
+/// `Index` because we must differentiate between the following cases:
+/// * runtime-known value (where we store the type)
+/// * comptime-known value (where we store the value)
+/// * `Nav` val (so that we can analyze the value lazily)
+/// * `Nav` ref (so that we can analyze the reference lazily)
+pub const CaptureValue = extern struct {
+    /// The captured entity, at FULL `u32` width: an `Index` for `.@"comptime"`/`.runtime`,
+    /// a `Nav.Index` for `.nav_val`/`.nav_ref`. Never narrowed, so `wrap` has no cast that
+    /// could truncate and `unwrap` is total.
+    idx: u32,
+    tag: Kind,
+
+    /// Spelled `Kind`, not `Tag`: `InternPool.Tag` is the item tag and the two would be
+    /// an ambiguous reference from inside this scope.
+    pub const Kind = enum(u32) { @"comptime", runtime, nav_val, nav_ref };
+
+    /// How many `u32` words one `CaptureValue` occupies in the `extra` array.
+    ///
+    /// The unit discipline this constant enforces, stated once so every use site can be
+    /// checked against it: **`Slice.len`, every `captures_len` field, and every
+    /// `ini.captures.len` are CAPTURE COUNTS, never word counts.** Only cursors into
+    /// `extra` and `ensureUnusedCapacity` reservations are word counts, and every one of
+    /// them multiplies a capture count by this constant at the point of conversion.
+    pub const extra_words = @divExact(@sizeOf(CaptureValue), @sizeOf(u32));
+
+    comptime {
+        // `extra` is a `[]u32` and captures are reinterpreted in place out of it, both on
+        // the read side (`Slice.get`) and the write side (`appendSliceAssumeCapacity`
+        // with `@ptrCast`). These two facts are what make that lawful rather than lucky:
+        // no over-alignment demand on a 4-byte-aligned array, and no padding holes whose
+        // contents would leak into the hash and the `std.mem.eql` identity comparison in
+        // `KeyAdapter`. Break either and the reinterpretation must become a copy.
+        assert(@alignOf(CaptureValue) == @alignOf(u32));
+        assert(std.meta.hasUniqueRepresentation(CaptureValue));
+    }
 
     pub fn wrap(val: Unwrapped) CaptureValue {
         return switch (val) {
-            .@"comptime" => |i| .{ .tag = .@"comptime", .idx = @intCast(@intFromEnum(i)) },
-            .runtime => |i| .{ .tag = .runtime, .idx = @intCast(@intFromEnum(i)) },
-            .nav_val => |i| .{ .tag = .nav_val, .idx = @intCast(@intFromEnum(i)) },
-            .nav_ref => |i| .{ .tag = .nav_ref, .idx = @intCast(@intFromEnum(i)) },
+            .@"comptime" => |i| .{ .tag = .@"comptime", .idx = @intFromEnum(i) },
+            .runtime => |i| .{ .tag = .runtime, .idx = @intFromEnum(i) },
+            .nav_val => |i| .{ .tag = .nav_val, .idx = @intFromEnum(i) },
+            .nav_ref => |i| .{ .tag = .nav_ref, .idx = @intFromEnum(i) },
         };
     }
     pub fn unwrap(val: CaptureValue) Unwrapped {
@@ -1955,13 +2027,21 @@ pub const CaptureValue = packed struct(u32) {
     pub const Slice = struct {
         tid: Zcu.PerThread.Id,
         start: u32,
+        /// A CAPTURE count, not a word count. `start` is a word offset into `extra`; the
+        /// two units differ by `CaptureValue.extra_words` and only `get` converts.
         len: u32,
 
         pub const empty: Slice = .{ .tid = .main, .start = 0, .len = 0 };
 
         pub fn get(slice: Slice, ip: *const InternPool) []CaptureValue {
             const extra = ip.getLocalShared(slice.tid).extra.acquire();
-            return @ptrCast(extra.view().items(.@"0")[slice.start..][0..slice.len]);
+            // The word count is computed in `usize`, not `u32`: `len * 2` in `u32` would
+            // be a wrap in a release build for a capture count above 2^31. Nothing in the
+            // language can produce one — but "nothing can" is not a reason to leave a
+            // wrapping multiply in a decoder.
+            const word_len = @as(usize, slice.len) * CaptureValue.extra_words;
+            const words = extra.view().items(.@"0")[slice.start..][0..word_len];
+            return @ptrCast(words);
         }
     };
 };
@@ -3529,7 +3609,7 @@ pub fn loadStructType(ip: *const InternPool, index: Index) LoadedStructType {
                     };
                 },
             };
-            extra_index += captures.len;
+            extra_index += captures.len * CaptureValue.extra_words;
             const field_names: NullTerminatedString.Slice = .{
                 .tid = unwrapped_index.tid,
                 .start = extra_index,
@@ -3617,7 +3697,7 @@ pub fn loadStructType(ip: *const InternPool, index: Index) LoadedStructType {
             .len = @intFromEnum(n),
         },
     };
-    extra_index += captures.len;
+    extra_index += captures.len * CaptureValue.extra_words;
     const field_names: NullTerminatedString.Slice = .{
         .tid = unwrapped_index.tid,
         .start = extra_index,
@@ -3691,7 +3771,7 @@ pub fn loadUnionType(ip: *const InternPool, index: Index) LoadedUnionType {
                     };
                 },
             };
-            extra_index += captures.len;
+            extra_index += captures.len * CaptureValue.extra_words;
             const reified_field_names: NullTerminatedString.Slice = if (extra.data.flags.any_captures == .reified) .{
                 .tid = unwrapped_index.tid,
                 .start = extra_index,
@@ -3753,7 +3833,7 @@ pub fn loadUnionType(ip: *const InternPool, index: Index) LoadedUnionType {
             .len = @intFromEnum(n),
         },
     };
-    extra_index += captures.len;
+    extra_index += captures.len * CaptureValue.extra_words;
     const reified_field_names: NullTerminatedString.Slice = if (extra.data.bits.captures_len == .reified) .{
         .tid = unwrapped_index.tid,
         .start = extra_index,
@@ -3824,7 +3904,7 @@ pub fn loadEnumType(ip: *const InternPool, index: Index) LoadedEnumType {
                 .start = extra_index,
                 .len = @intFromEnum(n),
             };
-            extra_index += captures.len;
+            extra_index += captures.len * CaptureValue.extra_words;
             break :info .{ zir_index.toOptional(), captures, .none };
         },
     };
@@ -4123,33 +4203,71 @@ pub const Index = enum(u32) {
             // user sees is a bare SIGSEGV with ZERO bytes on stderr and no exit
             // diagnostic at all.
             //
-            // The limit is real and it is NARROW. `InternPool.Index` is confined to
-            // 30 bits — not 32 — because `CaptureValue` (`packed struct(u32)`) carries
-            // one in a `u30` field alongside a 2-bit tag. Those 30 bits are then split
-            // `tid_width = log2_ceil(thread_count)` ways, one partition per compiler
-            // thread, so the ceiling SHRINKS as the host gets wider. Semantic analysis
-            // of a single comptime unit is serial, so one partition absorbs the entire
-            // comptime workload while the others sit nearly empty.
+            // The limit was real and it was NARROW. Until patch/005 `InternPool.Index`
+            // was confined to 30 bits — not 32 — because `CaptureValue` was a
+            // `packed struct(u32)` carrying one in a `u30` field alongside a 2-bit tag.
+            // Those 30 bits are then split `tid_width = log2_ceil(partitions)` ways, one
+            // partition per compiler thread, so the ceiling SHRINKS as the host gets
+            // wider. Semantic analysis of a single comptime unit is serial, so one
+            // partition absorbs the entire comptime workload while the others sit nearly
+            // empty. patch/001 did not raise that ceiling; it converted it from silent
+            // memory corruption into the named refusal below, which survives release
+            // builds and reports the numbers needed to size a real fix.
             //
-            // This patch does not raise the ceiling (widening `CaptureValue` touches 48
-            // sites and changes the `extra` trailing-data encoding; that is priced, not
-            // executed, here). It converts the ceiling from silent memory corruption
-            // into a named refusal that survives release builds and reports the numbers
-            // needed to size a real fix.
+            // patch/005 raised it, to 31 bits — and the reason it is 31 and not 32 is a
+            // SECOND confiner that patch/002's pricing did not know about. Recorded here
+            // because the next person to reach this wall will otherwise re-derive it:
             //
-            // patch/005 update: the ceiling is still 30 bits, but WHAT SPLITS IT changed.
-            // The partition count no longer follows `-j`; it derives from physical cores,
-            // rounded up to a power of two (`src/ThreadPlan.zig`), which on a 6c/12t host
-            // moves this limit from 67,108,863 to 134,217,727. The remedy sentence below
-            // was updated with it -- a remedy that names a flag which no longer does the
-            // job is worse than no remedy at all.
-            const index_mask = ip.getIndexMask(u30);
+            //   `Air.Inst.Ref` (`Air.zig:1174-1176`) is an `enum(u32)` whose TOP BIT is a
+            //   tag: 0 means "the low 31 bits are an `InternPool.Index`", 1 means "the low
+            //   31 bits are an AIR instruction index". `Ref.fromIntern` (`Air.zig:1211-1215`)
+            //   therefore does `assert(@intFromEnum(ip_index) >> 31 == 0)` and then
+            //   `@intCast` to `u31` — an assert compiled OUT of ReleaseFast, guarding an
+            //   `@intCast` that is UB there. `Air.ShuffleOneMask` (`Air.zig:1416-1421`)
+            //   packs an `Index` into a `u31` beside a 1-bit kind and truncates the same
+            //   way. Every `Index` that ever reaches AIR — which is every type and every
+            //   comptime value used by a function body — passes through both.
+            //
+            // So `CaptureValue` was never the only thing standing between us and 32 bits;
+            // it was the FIRST of two, and it cost 2 bits where AIR costs 1. Widening
+            // `CaptureValue` alone buys exactly the one bit AIR leaves free. Taking the
+            // last bit would mean re-representing `Air.Inst.Ref`, which lives in the
+            // 8-byte payload of every AIR instruction — a different and much larger patch,
+            // refused here by name rather than half-attempted.
+            //
+            // Net: `CaptureValue` is now two `u32` words with a full-`u32` payload field
+            // (see its declaration), and this encoding moved from
+            // `tid_shift_30`/`getIndexMask(u30)` to `tid_shift_31`/`getIndexMask(u31)`.
+            // Per-partition capacity went from `2^30 >> tid_width` to `2^31 >> tid_width`
+            // — 2x, not the 4x the dossier projected — so a 16-way split now carries
+            // 134,217,727 items per partition instead of 67,108,863.
+            //
+            // Two edges this width closes for free, both worth knowing:
+            //  * `Index.none` is `maxInt(u32)` and is the empty marker in every
+            //    `Shard.map`. At 31 bits no lawful `(tid, index)` pair can encode to it,
+            //    so the sentinel stays unreachable BY CONSTRUCTION. At 32 bits exactly one
+            //    pair could, and would have needed its own named refusal.
+            //  * `tid_shift_31` is computed as `31 - tid_width` directly, where
+            //    `tid_shift_32` is `tid_shift_31 +| 1` and therefore SATURATES at
+            //    `tid_width == 0` (patch/002 Finding 3, point 2). This encoding never
+            //    touches that edge.
+            //
+            // The refusal STAYS: a 2x-larger ceiling is still a ceiling, and the failure
+            // mode it replaces (wrapped index -> wild pointer, SIGSEGV with zero bytes on
+            // stderr) is unchanged in kind.
+            //
+            // Also live: the partition count no longer follows `-j`; it derives from
+            // physical cores, rounded up to a power of two (`src/ThreadPlan.zig`). The
+            // remedy sentence names `--intern-partitions` for that reason — a remedy that
+            // names a flag which no longer does the job is worse than no remedy at all.
+            const index_mask = ip.getIndexMask(u31);
             if (unwrapped.index > index_mask) {
                 @branchHint(.cold);
                 std.debug.panic(
                     "InternPool: per-thread Index space exhausted on thread {d}: item index " ++
-                        "{d} exceeds this thread's limit of {d}. `Index` is 30 bits wide " ++
-                        "(CaptureValue.idx is u30) and is split {d} ways ({d} bits) across " ++
+                        "{d} exceeds this thread's limit of {d}. `Index` is 31 bits wide " ++
+                        "(the 32nd is `Air.Inst.Ref`'s tag bit) and is split {d} ways ({d} " ++
+                        "bits) across " ++
                         "compiler threads, so a wider host gets a SMALLER per-thread limit; " ++
                         "comptime analysis of one unit is serial, so it all lands in a single " ++
                         "partition. Lower `--intern-partitions` to widen each partition " ++
@@ -4163,11 +4281,16 @@ pub const Index = enum(u32) {
                         index_mask,
                         @as(u32, 1) << ip.tid_width,
                         ip.tid_width,
-                        @as(u32, std.math.maxInt(u30)) >> 1,
+                        @as(u32, std.math.maxInt(u31)) >> 1,
                     },
                 );
             }
-            return @enumFromInt(@shlExact(@as(u32, @intFromEnum(unwrapped.tid)), ip.tid_shift_30) |
+            // Bit 31 of the result is necessarily 0, which is what makes the `u31`
+            // narrowings in `Air.zig` total rather than lucky:
+            //   tid   <= 2^tid_width - 1, shifted left by (31 - tid_width) -> < 2^31
+            //   index <= maxInt(u31) >> tid_width                          -> < 2^31
+            // and the two occupy disjoint bit ranges, so their `or` is < 2^31.
+            return @enumFromInt(@shlExact(@as(u32, @intFromEnum(unwrapped.tid)), ip.tid_shift_31) |
                 unwrapped.index);
         }
 
@@ -4209,8 +4332,11 @@ pub const Index = enum(u32) {
             .tid = .main,
             .index = @intFromEnum(index),
         } else .{
-            .tid = @enumFromInt(@intFromEnum(index) >> ip.tid_shift_30 & ip.getTidMask()),
-            .index = @intFromEnum(index) & ip.getIndexMask(u30),
+            // cgm-zig PATCH 005: was `tid_shift_30` / `getIndexMask(u30)`. Must stay the
+            // exact inverse of `Unwrapped.wrap` above; see the comment there for why the
+            // width is 31 and not 32.
+            .tid = @enumFromInt(@intFromEnum(index) >> ip.tid_shift_31 & ip.getTidMask()),
+            .index = @intFromEnum(index) & ip.getIndexMask(u31),
         };
     }
 
@@ -4376,7 +4502,14 @@ pub const Index = enum(u32) {
                             switch (@typeInfo(Type)) {
                                 .int => {},
                                 .@"enum" => {},
-                                .@"struct" => |info| assert(info.layout == .@"packed"),
+                                // cgm-zig PATCH 005: was `assert(info.layout == .@"packed")`.
+                                // What this check is really for is that a trailing element
+                                // has a LAYOUT the debugger-side decoder can rely on;
+                                // `packed` was sufficient only because every trailing struct
+                                // happened to be packed. `CaptureValue` is now `extern`
+                                // (see its declaration for why it cannot be `packed`), which
+                                // is equally well-defined. `.auto` still refuses, by name.
+                                .@"struct" => |info| assert(info.layout != .auto),
                                 .optional => |info| {
                                     checkConfig(name ++ ".?");
                                     checkField(name ++ ".?", info.child);
@@ -5537,7 +5670,7 @@ pub const Tag = enum(u8) {
     /// Trailing:
     /// 0. type_hash: PackedU64  // if `any_captures == .reified`
     /// 1. captures_len: u32     // if `any_captures == .true`
-    /// 2. capture: CaptureValue // for each `captures_len`
+    /// 2. capture: CaptureValue // for each `captures_len`; 2 u32 words each
     /// 3. field_name: NullTerminatedString // for each `fields_len`
     /// 4. field_type: Index           // for each `fields_len`
     /// 5. field_default: Index        // if `any_field_defaults`; for each `fields_len`
@@ -5582,7 +5715,7 @@ pub const Tag = enum(u8) {
 
     /// Trailing:
     /// 0. type_hash: PackedU64  // if `captures_len == .reified`
-    /// 1. capture: CaptureValue // if `captures_len != .reified`; for each `captures_len`
+    /// 1. capture: CaptureValue // if `captures_len != .reified`; for each `captures_len`; 2 u32 words each
     /// 2. field_name: NullTerminatedString // for each `fields_len`
     /// 3. field_type: Index                // for each `fields_len`
     /// 4. field_default: Index             // if item tag implies field defaults; for each `fields_len`
@@ -5617,7 +5750,7 @@ pub const Tag = enum(u8) {
     /// Trailing:
     /// 0. type_hash: PackedU64   // if `any_captures == .reified`
     /// 1. captures_len: u32      // if `any_captures == .true`
-    /// 2. capture: CaptureValue  // if `any_captures == .true`; for each `captures_len`
+    /// 2. capture: CaptureValue  // if `any_captures == .true`; for each `captures_len`; 2 u32 words each
     /// 3. reified_field_name: NullTerminatedString // if `any_captures == .reified`; for each `fields_len`
     /// 4. field_type: Index      // for each `fields_len`
     /// 5. field_align: Alignment // for each `fields_len` if `any_field_aligns`
@@ -5676,7 +5809,7 @@ pub const Tag = enum(u8) {
     ///
     /// Trailing:
     /// 0. type_hash: PackedU64  // if `captures_len == .reified`
-    /// 1. capture: CaptureValue // if `captures_len != .reified`; for each `captures_len`
+    /// 1. capture: CaptureValue // if `captures_len != .reified`; for each `captures_len`; 2 u32 words each
     /// 2. reified_field_name: NullTerminatedString // if `captures_len == .reified`; for each `fields_len`
     /// 3. field_type: Index     // for each `fields_len`
     pub const TypeUnionPacked = struct {
@@ -5711,7 +5844,7 @@ pub const Tag = enum(u8) {
     /// 0. owner_union: Index               // if `captures_len == .generated_union_tag`
     /// 1. zir_index: TrackedInst.Index     // if `captures_len != .generated_union_tag`
     /// 2. type_hash: PackedU64             // if `captures_len == .reified`
-    /// 3. capture: CaptureValue            // if `captures_len` is not a named tag; for each `captures_len`
+    /// 3. capture: CaptureValue            // if `captures_len` is not a named tag; for each `captures_len`; 2 u32 words each
     /// 4. field_value_map: MapIndex        // if tag is not `.type_enum_auto`
     /// 5. field_name: NullTerminatedString // for each `fields_len`
     /// 6. field_value: Index               // if tag is not `.type_enum_auto`; for each `fields_len`
@@ -5740,7 +5873,7 @@ pub const Tag = enum(u8) {
     };
 
     /// Trailing:
-    /// 0. capture: CaptureValue // for each `captures_len`
+    /// 0. capture: CaptureValue // for each `captures_len`; 2 u32 words each
     pub const TypeOpaque = struct {
         zir_index: TrackedInst.Index,
         captures_len: u32,
@@ -8059,7 +8192,7 @@ pub fn getDeclaredStructType(
         .@"extern" => true,
         .@"packed" => {
             try extra.ensureUnusedCapacity(@typeInfo(Tag.TypeStructPacked).@"struct".fields.len +
-                ini.captures.len + // capture
+                ini.captures.len * CaptureValue.extra_words + // capture (2 u32 words each)
                 ini.fields_len + // field_name
                 ini.fields_len + // field_type
                 (if (ini.any_field_defaults) ini.fields_len else 0)); // field_default
@@ -8107,7 +8240,7 @@ pub fn getDeclaredStructType(
 
     try extra.ensureUnusedCapacity(@typeInfo(Tag.TypeStruct).@"struct".fields.len +
         1 + // captures_len
-        ini.captures.len + // capture
+        ini.captures.len * CaptureValue.extra_words + // capture (2 u32 words each)
         ini.fields_len + // field_name
         ini.fields_len + // field_type
         (if (ini.any_field_defaults) ini.fields_len else 0) + // field_default
@@ -8376,7 +8509,7 @@ pub fn getDeclaredUnionType(
         .@"extern" => true,
         .@"packed" => {
             try extra.ensureUnusedCapacity(@typeInfo(Tag.TypeUnionPacked).@"struct".fields.len +
-                ini.captures.len + // capture
+                ini.captures.len * CaptureValue.extra_words + // capture (2 u32 words each)
                 ini.fields_len); // field_type
 
             const extra_index = addExtraAssumeCapacity(extra, Tag.TypeUnionPacked{
@@ -8418,7 +8551,7 @@ pub fn getDeclaredUnionType(
 
     try extra.ensureUnusedCapacity(@typeInfo(Tag.TypeUnion).@"struct".fields.len +
         1 + // captures_len
-        ini.captures.len + // capture
+        ini.captures.len * CaptureValue.extra_words + // capture (2 u32 words each)
         ini.fields_len + // field_type
         (if (ini.any_field_aligns) (ini.fields_len + 3) / 4 else 0)); // field_align
 
@@ -8651,7 +8784,7 @@ pub fn getDeclaredEnumType(
 
     try extra.ensureUnusedCapacity(@typeInfo(Tag.TypeEnum).@"struct".fields.len +
         1 + // zir_index
-        ini.captures.len + // capture
+        ini.captures.len * CaptureValue.extra_words + // capture (2 u32 words each)
         @intFromBool(have_values) + // field_value_map
         ini.fields_len + // field_name
         (if (have_values) ini.fields_len else 0)); // field_value
@@ -8857,7 +8990,8 @@ pub fn getDeclaredOpaqueType(ip: *InternPool, gpa: Allocator, io: Io, tid: Zcu.P
     const extra = local.getMutableExtra(gpa, io);
     try items.ensureUnusedCapacity(1);
 
-    try extra.ensureUnusedCapacity(@typeInfo(Tag.TypeOpaque).@"struct".fields.len + ini.captures.len);
+    try extra.ensureUnusedCapacity(@typeInfo(Tag.TypeOpaque).@"struct".fields.len +
+        ini.captures.len * CaptureValue.extra_words); // capture (2 u32 words each)
     const extra_index = addExtraAssumeCapacity(extra, Tag.TypeOpaque{
         .zir_index = ini.zir_index,
         .captures_len = @intCast(ini.captures.len),
@@ -10659,7 +10793,7 @@ fn dumpStatsFallible(ip: *const InternPool, w: *Io.Writer, arena: Allocator) !vo
                         .reified => n += 2, // type_hash: PackedU64
                         .true => {
                             n += 1; // captures_len: u32
-                            n += extra_items[extra.end]; // capture: CaptureValue
+                            n += @as(usize, extra_items[extra.end]) * CaptureValue.extra_words; // capture: CaptureValue
                         },
                         .false => {},
                     }
@@ -10685,7 +10819,7 @@ fn dumpStatsFallible(ip: *const InternPool, w: *Io.Writer, arena: Allocator) !vo
                     const extra = extraDataTrail(extra_list, Tag.TypeStructPacked, data);
                     switch (extra.data.bits.captures_len) {
                         .reified => n += 2, // type_hash: PackedU64
-                        _ => |len| n += @intFromEnum(len), // capture: CaptureValue
+                        _ => |len| n += @as(usize, @intFromEnum(len)) * CaptureValue.extra_words, // capture: CaptureValue
                     }
                     n += extra.data.fields_len; // field_name: NullTerminatedString
                     n += extra.data.fields_len; // field_type: Index
@@ -10696,7 +10830,7 @@ fn dumpStatsFallible(ip: *const InternPool, w: *Io.Writer, arena: Allocator) !vo
                     const extra = extraDataTrail(extra_list, Tag.TypeStructPacked, data);
                     switch (extra.data.bits.captures_len) {
                         .reified => n += 2, // type_hash: PackedU64
-                        _ => |len| n += @intFromEnum(len), // capture: CaptureValue
+                        _ => |len| n += @as(usize, @intFromEnum(len)) * CaptureValue.extra_words, // capture: CaptureValue
                     }
                     n += extra.data.fields_len; // field_name: NullTerminatedString
                     n += extra.data.fields_len; // field_type: Index
@@ -10710,7 +10844,7 @@ fn dumpStatsFallible(ip: *const InternPool, w: *Io.Writer, arena: Allocator) !vo
                         .reified => n += 2, // type_hash: PackedU64
                         .true => {
                             n += 1; // captures_len: u32
-                            n += extra_items[extra.end]; // capture: CaptureValue
+                            n += @as(usize, extra_items[extra.end]) * CaptureValue.extra_words; // capture: CaptureValue
                         },
                         .false => {},
                     }
@@ -10725,7 +10859,7 @@ fn dumpStatsFallible(ip: *const InternPool, w: *Io.Writer, arena: Allocator) !vo
                     const extra = extraDataTrail(extra_list, Tag.TypeUnionPacked, data);
                     switch (extra.data.bits.captures_len) {
                         .reified => n += 2, // type_hash: PackedU64
-                        _ => |len| n += @intFromEnum(len), // capture: CaptureValue
+                        _ => |len| n += @as(usize, @intFromEnum(len)) * CaptureValue.extra_words, // capture: CaptureValue
                     }
                     n += extra.data.fields_len; // field_type: Index
                     break :b n * @sizeOf(u32);
@@ -10741,7 +10875,7 @@ fn dumpStatsFallible(ip: *const InternPool, w: *Io.Writer, arena: Allocator) !vo
                         },
                         _ => |len| {
                             n += 1; // zir_index: TrackedInst.Index,
-                            n += @intFromEnum(len); // capture: CaptureValue
+                            n += @as(usize, @intFromEnum(len)) * CaptureValue.extra_words; // capture: CaptureValue
                         },
                     }
                     n += extra.fields_len; // field_name: NullTerminatedString
@@ -10758,7 +10892,7 @@ fn dumpStatsFallible(ip: *const InternPool, w: *Io.Writer, arena: Allocator) !vo
                         },
                         _ => |len| {
                             n += 1; // zir_index: TrackedInst.Index,
-                            n += @intFromEnum(len); // capture: CaptureValue
+                            n += @as(usize, @intFromEnum(len)) * CaptureValue.extra_words; // capture: CaptureValue
                         },
                     }
                     n += 1; // field_value_map: MapIndex
@@ -10769,7 +10903,7 @@ fn dumpStatsFallible(ip: *const InternPool, w: *Io.Writer, arena: Allocator) !vo
                 .type_opaque => b: {
                     var n: usize = @typeInfo(Tag.TypeEnum).@"struct".fields.len;
                     const extra = extraData(extra_list, Tag.TypeOpaque, data);
-                    n += extra.captures_len; // capture: CaptureValue
+                    n += @as(usize, extra.captures_len) * CaptureValue.extra_words; // capture: CaptureValue
                     break :b n * @sizeOf(u32);
                 },
 

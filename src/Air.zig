@@ -1210,6 +1210,20 @@ pub const Inst = struct {
             return switch (ip_index) {
                 .none => .none,
                 else => {
+                    // cgm-zig PATCH 005 — this assert is the load-bearing half of a
+                    // coupling that is easy to break from the other end.
+                    //
+                    // It is `assert`, so it is compiled OUT of ReleaseFast, and it guards
+                    // an `@intCast` that is UB there. It is nevertheless TOTAL, and stays
+                    // total only because `InternPool.Index.Unwrapped.wrap` encodes at 31
+                    // bits and can never set bit 31 (the derivation is written out there).
+                    // The tag bit documented above is exactly why that encoding is 31 bits
+                    // and not 32: patch/005 widened `CaptureValue` off the `Index` and
+                    // found this waiting one bit later.
+                    //
+                    // ANY future widening of `InternPool.Index` past 31 bits must
+                    // re-represent `Ref` first. Done in the other order, this line becomes
+                    // a silent truncation in every shipped compiler.
                     assert(@intFromEnum(ip_index) >> 31 == 0);
                     return @enumFromInt(@as(u31, @intCast(@intFromEnum(ip_index))));
                 },
@@ -1413,6 +1427,12 @@ pub const VectorCmp = struct {
 
 /// Used by `Inst.Tag.shuffle_one`. Represents a mask element which either indexes into a
 /// runtime-known vector, or is a comptime-known value.
+///
+/// cgm-zig PATCH 005: the `value` arm packs an `InternPool.Index` into `index: u31`, so
+/// this is the SECOND place (with `Inst.Ref` above) that confines `Index` to 31 bits.
+/// `value` below is total for the same reason and only for the same reason:
+/// `Index.Unwrapped.wrap` never sets bit 31. Widening `Index` past 31 bits must
+/// re-represent this struct too.
 pub const ShuffleOneMask = packed struct(u32) {
     index: u31,
     kind: enum(u1) { elem, value },
