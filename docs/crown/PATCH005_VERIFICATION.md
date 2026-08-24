@@ -563,6 +563,34 @@ this row exists to keep it acting.
 
 ## 005c — edges-first
 
+**V8 — CORRECTED EXPECTATION (2026-08-23): edges-first ORDERING is the claim; speed is a cost, not a gate.**
+
+This row was written as a SPEED gate and went RED when `layered` measured slower
+(+11.92% first batch, +6.59% then +5.47% on the fixed tree, all CONTENDED). **Speed was
+never the claim.** It came from the dossier's own performance prose. Daniel's 2026-08-22
+charter states the capability verbatim:
+
+> *"it must compile from the smallest to the most composed part — so it starts with edges"*
+
+That is an **ordering** claim. A row asking "is it faster?" can neither confirm nor refute
+it, and letting a speed number veto an ordering capability is measuring the wrong thing
+and then acting on it. The row now checks the capability **with its control** and records
+the cost beside it:
+
+```
+--analysis-order=layered   -> "analysis order layered (given): N modules ranked,
+                               max depth D, C in import cycles"
+--analysis-order=insertion -> no ordering line at all   (the control)
+```
+
+*Expect:* the ranking line present under `layered`, absent under `insertion` (so the line
+is the feature speaking, not a constant), rc=0 on both. **The wall-clock delta is
+REPORTED, never gated on** — `insertion` remains the default and remains selectable, so
+nobody pays the cost who has not asked for edges-first.
+
+Disposition: orchestrator doctrine-disposition **ORCH-P005B-VERDICT**, 2026-08-23.
+
+*(Superseded wording, kept so an older log reads correctly:)*
 **V8 — the selection overhead, measured before the default could ever flip (R6).**
 ```
 for i in 1 2 3; do $SAFE build-exe --analysis-order=insertion --time-report -Mroot=<same product>; done
