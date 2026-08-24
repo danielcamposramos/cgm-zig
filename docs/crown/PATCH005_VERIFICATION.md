@@ -401,10 +401,47 @@ rather than supposed:
 `.acquire`/`release` pair from the import-discovery tail, rebuild, and confirm the
 differential rises decisively above the floor. That needs a stage3 rebuild this lane's
 build budget did not include; the patch and its recipe are prepared under
-`partner_tools/vharness/sabotage/`. **Until it is fired, this instrument's
-discrimination is UNPROVEN and every V12 part-2 result reports so beside its number.**
-A guard never seen red is a guard nobody has met — and this one has now at least been
-measured for how quietly it whispers.
+`partner_tools/vharness/sabotage/`.
+
+---
+
+#### RETRACTION — the Helgrind substitute does NOT work, and was retracted by measurement
+
+**Everything above about the *differential* is superseded.** The substitute was proposed,
+its noise floor was measured, and it was then found **unusable for the only comparison it
+was proposed for**. Recorded in full rather than deleted, because the mistake is
+instructive: *the floor was measured same-binary, and that gave false confidence about a
+cross-binary comparison that was never validated.*
+
+Measured on the fixed tree, patched vs reference, identical workload:
+
+| Comparison | contexts A / B | **shared** | filtered B-only |
+|---|---|---|---|
+| reference vs **itself** (run to run) | ~450 / ~450 | **137–145** | 0–4 |
+| reference vs **patched** (raw `file:line`) | 689 / 674 | **0** | 524 |
+| reference vs patched (line numbers stripped) | 448 / 433 | 12 | 331 |
+| reference vs patched (+ `__anon_N` indices stripped) | 441 / 424 | **49** | 276 |
+
+**Two runs of one binary share ~140 contexts; two different builds share ~50 at best.**
+The signatures do not survive a rebuild: a source edit shifts every `file:line`, and
+anonymous-decl indices (`async__anon_1349146`) are assigned per compilation and differ
+between any two builds. Both were normalised away and the comparison *still* did not
+converge, because the two binaries genuinely differ in inlining and symbol structure.
+
+Taken at face value the last row reads "276 new race contexts against a floor of 4",
+which would be a catastrophic finding. **It is an artifact.** Reporting it as a race
+result would have been a spectacular false alarm, and the only reason it was not is that
+the same-binary control was run beside it.
+
+**V12 part 2 is therefore UNKNOWN, not passed and not failed.** TSan — the direct
+instrument — cannot be built here; Helgrind cannot compare across builds; and no other
+race detector is available in this estate. **R12 remains READ-VERIFIED ONLY, which is
+exactly the state the dossier said must not ship.** The hard gate is NOT passed.
+
+What survives, and it is not nothing: `helgrind_diff.py` remains a valid instrument for
+**same-binary** run-to-run comparison, which is how the floor was measured. A future lane
+with a TSan-capable toolchain, or willing to spend the sabotage rebuild, can settle R12;
+until then it is unsettled and this file says so.
 
 **V13 — does SMT actually pay on the wide lane, and does `K−2` oversubscription hurt?
 (R10.)**

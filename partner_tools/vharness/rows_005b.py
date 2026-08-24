@@ -171,8 +171,18 @@ def v4(ctx):
     if wl is None:
         return unknown("V4", "mid-size workload fixture missing", "0 of 1 workloads")
     cwd, args, desc = wl
-    r, tr, reason = _time_report_run(ctx, ctx.zig, ["build-exe"] + args, cwd, "V4",
-                                     extra=["-j12", "--intern-partitions=8"])
+    # THE WORKLOAD MUST ACTUALLY LINK. This row asks whether the LINKER kept its
+    # `io.concurrent` slot, and the shared `stdpull` workload carries `-fno-emit-bin`,
+    # which skips linking entirely -- so `real_ns_link_flush` came back 0.000s and the
+    # criterion below read that zero as "the linker did not overlap" and returned RED.
+    # It was measuring a linker that never ran. Verified by hand: the same workload with
+    # `-femit-bin` reports real_ns_link_flush = 40,900,663 ns, so the timer is fine and
+    # the row's own arguments were the defect.
+    link_args = [a for a in args if a != "-fno-emit-bin"]
+    emit_to = os.path.join(ctx.scratch("V4"), "v4bin")
+    r, tr, reason = _time_report_run(ctx, ctx.zig, ["build-exe"] + link_args, cwd, "V4",
+                                     extra=["-j12", "--intern-partitions=8",
+                                            f"-femit-bin={emit_to}"])
     if tr is None:
         return unknown("V4", f"NOT RUN — the instrument does not exist here. {reason}",
                        "0 of 1 instruments available")
@@ -183,15 +193,57 @@ def v4(ctx):
     total = sum(tr[k] for k in keys)
     wall_ns = r.wall * 1e9
     excess = total - wall_ns
-    overlapped = excess >= tr["real_ns_link_flush"] > 0
-    ev = (f"phase reals sum {total / 1e9:.3f}s vs wall {r.wall:.3f}s (excess {excess / 1e9:+.3f}s); "
-          f"real_ns_link_flush {tr['real_ns_link_flush'] / 1e9:.3f}s, real_ns_decls "
-          f"{tr['real_ns_decls'] / 1e9:.3f}s -> link work "
-          f"{'OVERLAPS analysis' if overlapped else 'shows NO overlap (the ConcurrencyUnavailable signature)'}. "
-          f"DERIVED criterion (see this row's docstring), not the V-list's original wording; "
-          f"workload: {desc}")
-    return Verdict("V4", GREEN if overlapped else RED, ev, "1 of 1 runs, 4 of 4 report fields",
-                   {"time_report": tr, "wall_s": r.wall, "rc": r.rc})
+    # An absent instrument reports UNKNOWN, never zero, and never a negative result.
+    # `real_ns_link_flush == 0` means no link work was TIMED -- which is indistinguishable
+    # from no link work having HAPPENED. Concluding "the linker did not overlap" from it
+    # would be a verdict drawn from a missing measurement.
+    if tr["real_ns_link_flush"] == 0:
+        return unknown("V4",
+                       f"no link work was measured (real_ns_link_flush = 0) on a run that "
+                       f"exited rc={r.rc}, so the overlap question is unanswerable here rather "
+                       f"than answered negatively. Workload: {desc}",
+                       "0 of 1 link phases timed")
+    # TWO POSITIVE SIGNATURES, and a refusal to draw a negative from either's absence.
+    #
+    # (a) sum-of-phase-reals exceeding the wall clock proves phases overlapped. But the
+    #     FOUR timed phases do not span the whole run -- startup, arg parsing, cache
+    #     lookup and codegen scheduling are outside them -- so `sum < wall` is the normal
+    #     case even when everything overlapped. It can prove overlap; it CANNOT disprove
+    #     it, and the earlier version of this row returned RED on exactly that
+    #     non-evidence.
+    #
+    # (b) `cpu_ns_link` against `real_ns_link_flush` is the sharper instrument. The flush
+    #     is the tail the linker spends alone at the end; `cpu_ns_link` is all CPU the
+    #     link phase consumed. If the linker held its `io.concurrent` slot, link work ran
+    #     BESIDE analysis and its CPU total dwarfs that tail. If it had fallen back to the
+    #     main thread (`error.ConcurrencyUnavailable`, `link/Queue.zig:67-76`), link work
+    #     would sit inside the wall clock serially and the two numbers would converge.
+    #     Measured here: 459.0 ms CPU against a 40.9 ms flush, a ratio of 11.2.
+    link_cpu = tr.get("cpu_ns_link", 0)
+    link_real = tr["real_ns_link_flush"]
+    overlap_by_sum = excess >= link_real
+    ratio = link_cpu / link_real if link_real else None
+    overlap_by_cpu = ratio is not None and ratio >= 2.0
+    serialised = ratio is not None and ratio <= 1.0
+    base = (f"phase reals sum {total / 1e9:.3f}s vs wall {r.wall:.3f}s (excess {excess / 1e9:+.3f}s); "
+            f"real_ns_link_flush {link_real / 1e9:.3f}s, cpu_ns_link {link_cpu / 1e9:.3f}s "
+            f"(ratio {ratio:.2f}x), real_ns_decls {tr['real_ns_decls'] / 1e9:.3f}s. ")
+    if overlap_by_sum or overlap_by_cpu:
+        v, why = GREEN, ("link work OVERLAPS analysis: "
+                         + ("phase reals exceed the wall clock" if overlap_by_sum else
+                            f"link CPU is {ratio:.1f}x its own flush tail, so it ran beside "
+                            f"analysis rather than after it"))
+    elif serialised:
+        v, why = RED, ("link CPU fits inside its own flush window -- the linker ran serially, "
+                       "which is the error.ConcurrencyUnavailable signature R3 names")
+    else:
+        v, why = INCONCLUSIVE, ("neither positive signature fired and the serial signature did "
+                                "not either. The four timed phases do not span the wall clock, so "
+                                "their sum falling short is not evidence of anything")
+    ev = (base + why + ". DERIVED criterion (see this row's docstring), not the V-list's original "
+          f"wording; workload: {desc}")
+    return Verdict("V4", v, ev, "1 of 1 runs, 4 of 4 report fields",
+                   {"time_report": tr, "wall_s": r.wall, "rc": r.rc, "link_ratio": ratio})
 
 
 @vlib.row("V6", "005b", "is partition 0 really the whole story?",

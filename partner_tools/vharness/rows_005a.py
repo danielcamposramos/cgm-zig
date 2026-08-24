@@ -111,7 +111,13 @@ def v0a(ctx):
 
 V1_ARMS = [
     ("1 unpinned", [], None),
-    ("2 -j4 --intern-partitions=2", ["-j4", "--intern-partitions=2"], None),
+    # `--intern-partitions=4`, not `=2`. This arm exists to exercise the `(given)`
+    # provenance path in the report line. `=2` used to serve that purpose, but it is now
+    # a REFUSED configuration: with >1 worker it leaves 0 allocating lanes, and the
+    # compiler names the refusal instead of hanging (it used to hang -- see V16). A
+    # refused run prints no report line, so keeping `=2` here would make V1 red for the
+    # deadlock fix working. The refusal itself is V16's row; this one is about the line.
+    ("2 -j4 --intern-partitions=4", ["-j4", "--intern-partitions=4"], None),
     ("3 taskset -c 0-3 (THE GATE)", [], "0-3"),
     ("4 --intern-partitions=logical", ["--intern-partitions=logical"], None),
 ]
@@ -145,7 +151,10 @@ def v1(ctx):
             results.append({"arm": label, "mask": m, "report": None, "rc": r.rc,
                             "timed_out": r.timed_out})
             continue
-        want_parts = (2 if "--intern-partitions=2" in extra else
+        given = next((int(a.split("=", 1)[1]) for a in extra
+                      if a.startswith("--intern-partitions=") and a.split("=", 1)[1].isdigit()),
+                     None)
+        want_parts = (given if given is not None else
                       exp["logical"] if "--intern-partitions=logical" in extra else None)
         if index_bits is None:
             # Derived from the compiler's FIRST answer, never asserted from a constant:

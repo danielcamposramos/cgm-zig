@@ -41,17 +41,40 @@ ERR_START = re.compile(
 )
 
 
-def normalise_frame(text: str) -> str:
+# `foo (bar.zig:123)` -> `foo (bar.zig)` when comparing across builds.
+LINENO = re.compile(r"\(([^():]+):\d+\)")
+
+
+def normalise_frame(text: str, fn_only: bool = False) -> str:
     text = HEX.sub("0xADDR", text)
     text = THREADNUM.sub("thread #N", text)
     # Drop the `(in /path/to/binary)` tail -- the path differs between the two
     # binaries under comparison BY CONSTRUCTION, and letting it into the signature
     # would make every context differ and report a fake 100% divergence.
     text = re.sub(r"\s*\(in [^)]*\)", "", text)
+    if fn_only:
+        # Anonymous-decl indices (`async__anon_1349146`, `spawn__anon_25805`) are assigned
+        # per COMPILATION, so they differ between any two builds -- including two builds of
+        # the same source. Measured: leaving them in held `shared` at 12 of ~450 across
+        # builds where two runs of ONE binary shared 145-151. They carry no identity across
+        # builds and must go before anything can be compared.
+        text = re.sub(r"__anon_\d+", "__anon_N", text)
+        # STRIP LINE NUMBERS when comparing two DIFFERENT BUILDS.
+        #
+        # Measured the hard way: comparing the patched compiler against the reference
+        # with line numbers in the signature produced `shared: 0` out of 689 vs 674
+        # contexts -- a fake 100% divergence, because the patch adds and moves source
+        # lines and every frame therefore reports a different `file:line`. The
+        # instrument was measuring the diff, not the runtime.
+        #
+        # Function+file granularity is coarser and says so: two distinct race sites
+        # inside one function collapse to one signature. It is the finest granularity
+        # that survives a source edit, which is the comparison actually being asked for.
+        text = LINENO.sub(r"(\1)", text)
     return text.strip()
 
 
-def contexts(path):
+def contexts(path, fn_only=False):
     """Yield one signature per error block. A block is a run of lines between blank
     `==PID==` separators; its signature is the hash of its ordered frame list."""
     out = OrderedDict()
@@ -68,7 +91,7 @@ def contexts(path):
                 continue
             m = FRAME.match(line)
             if m:
-                cur.append(normalise_frame(m.group(1)))
+                cur.append(normalise_frame(m.group(1), fn_only))
     if cur:
         sig = _sig(cur)
         if sig:
@@ -98,8 +121,12 @@ def main():
     if "--filter" in args:
         pat = re.compile(args[args.index("--filter") + 1])
 
-    A = contexts(a_path)
-    B = contexts(b_path)
+    fn_only = "--fn-only" in args
+    A = contexts(a_path, fn_only)
+    B = contexts(b_path, fn_only)
+    if fn_only:
+        print("MODE: fn-only (line numbers stripped) — required when the two logs come "
+              "from DIFFERENT BUILDS, because a source edit shifts every file:line.")
     only_a = [s for s in A if s not in B]
     only_b = [s for s in B if s not in A]
     fa = [s for s in only_a if interesting(A[s], pat)]
