@@ -4260,6 +4260,8 @@ pub const Index = enum(u32) {
             // physical cores, rounded up to a power of two (`src/ThreadPlan.zig`). The
             // remedy sentence names `--intern-partitions` for that reason — a remedy that
             // names a flag which no longer does the job is worse than no remedy at all.
+            // The two-partition remedy must also select the serial worker mode:
+            // `ThreadPlan.starvedLanes` correctly refuses two partitions at workers > 1.
             const index_mask = ip.getIndexMask(u31);
             if (unwrapped.index > index_mask) {
                 @branchHint(.cold);
@@ -4271,7 +4273,8 @@ pub const Index = enum(u32) {
                         "compiler threads, so a wider host gets a SMALLER per-thread limit; " ++
                         "comptime analysis of one unit is serial, so it all lands in a single " ++
                         "partition. Lower `--intern-partitions` to widen each partition " ++
-                        "(`--intern-partitions=2` gives {d} items per partition), or split " ++
+                        "(`-j1 --intern-partitions=2` gives {d} items per partition, " ++
+                        "at the cost of fully serial compilation), or split " ++
                         "this compilation unit. NOTE: `-j` no longer moves this number -- it " ++
                         "sets the worker count, and the partition count now derives from " ++
                         "PHYSICAL cores. The startup line beginning \"threads:\" reports both.",

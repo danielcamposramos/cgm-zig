@@ -24,8 +24,9 @@ why of everything here. AI partners are welcome as senior contributors:
   verbatim upstream base (the repo's root commit, checksum-anchored). New
   behavior hides behind new flags; stock invocations behave stock. No language
   divergence. If upstream fixes a defect we patched, our patch retires.
-- **ReleaseSafe posture.** The working compiler is built with safety checks ON
-  (`build-safe/stage3/bin/zig`). Failures must name themselves; a silent crash
+- **ReleaseSafe posture.** The working compiler is built with safety checks ON.
+  Resolve `PROMOTED/zig` and its record for the current binary; `build-safe/`
+  is not the promotion authority. Failures must name themselves; a silent crash
   is itself a bug to fix.
 - **Machine courtesy.** Never rebuild the compiler or fire a whole-closure
   compile while another long build owns the machine. Check first:
@@ -84,7 +85,10 @@ the cause is accumulation rather than one construct — an isolation ladder
 full recipe and every gotcha with its negative control. The short form:
 - Plain source tarball + system LLVM (Debian: `llvm-21`, `liblld-21-dev`,
   `libclang-21-dev` — the runtime `libclang-cpp.so` alone is NOT enough),
-  cmake + ninja, `-DCMAKE_BUILD_TYPE=ReleaseSafe`.
+  cmake + ninja, `-DCMAKE_BUILD_TYPE=RelWithDebInfo -DZIG_RELEASE_SAFE=ON`.
+  `CMAKE_BUILD_TYPE=ReleaseSafe` alone is NOT a safety selector in this fork:
+  on a fresh cache it generates ReleaseFast plus stripping. Verify the generated
+  stage3 command contains `-Doptimize=ReleaseSafe`, not `-Dstrip`.
 - **`-Ddebug-extensions` is not optional** — the crash-report machinery
   ("Analyzing <file>") is compiled out without it, and that machinery is the
   point of a diagnostic build.

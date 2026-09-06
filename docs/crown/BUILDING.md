@@ -15,13 +15,29 @@ compiler and must not become the promoted one.
 
 ```bash
 cmake -B build-safe \
-    -DCMAKE_BUILD_TYPE=ReleaseSafe \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DZIG_RELEASE_SAFE=ON \
     -DZIG_STATIC_LLVM=OFF \
     -DZIG_EXTRA_BUILD_ARGS=-Ddebug-extensions
 ninja -C build-safe
 ```
 
 Result: `build-safe/stage3/bin/zig`.
+
+For a new release candidate, choose a fresh repo-local `build-*` directory;
+do not overwrite a promoted compiler's build tree. The directory name is not
+evidence of its build mode.
+
+**The two build-mode switches are not interchangeable.** `CMAKE_BUILD_TYPE`
+controls the C/C++ bootstrap and stripping policy; `ZIG_RELEASE_SAFE=ON`
+selects `-Doptimize=ReleaseSafe` for the self-hosted compiler. The previous
+recipe used only `-DCMAKE_BUILD_TYPE=ReleaseSafe`, which this project's
+`CMakeLists.txt` does not recognize as a safety selector. On a fresh cache it
+generates a **ReleaseFast, stripped** stage3 command. Use `RelWithDebInfo` plus
+`ZIG_RELEASE_SAFE=ON` and inspect the generated stage3 command before building.
+The existing station build caches already used that correct pair; this finding
+does not reclassify their promoted binaries. The configure-only negative and
+positive controls are recorded in `BUILD_RECIPE_CORRECTION_2026-09-06.md`.
 
 - **System LLVM** on Debian needs `llvm-21`, `liblld-21-dev`, `libclang-21-dev`.
   The runtime `libclang-cpp.so` **alone is not enough** — the `-dev` packages

@@ -2,7 +2,7 @@
 """fork_status.py — the fork's eyes.
 
 Reports, with honest denominators and UNKNOWN-never-zero:
-  1. TOOLCHAIN — is the safe stage3 compiler present? version, sha256, mtime.
+  1. TOOLCHAIN — resolve the promoted authority; identify production and reference.
   2. BASE      — the pinned upstream import (root commit) this patchset stands on.
   3. PATCHSET  — commits that touch upstream code (src/, lib/, stage1/, tools/,
                  build.zig*) since the base, i.e. the actual divergence.
@@ -14,14 +14,21 @@ Stdlib only.
 """
 
 import argparse
+import contextlib
 import hashlib
+import io
 import os
 import subprocess
 import sys
 from datetime import datetime, timezone
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STAGE3 = os.path.join(REPO, "build-safe", "stage3", "bin", "zig")
+# PROMOTED/zig is the station's promotion authority (PROMOTED/RECORD.md).
+# Resolve it at report time: a version string alone cannot distinguish two
+# patched 0.16.0 binaries. The old build-safe binary is only a reference and
+# must never stand in for a missing or broken production pointer.
+PROMOTED = os.path.join(REPO, "PROMOTED", "zig")
+REFERENCE_STAGE3 = os.path.join(REPO, "build-safe", "stage3", "bin", "zig")
 # Paths that count as "upstream code" for divergence purposes. Everything else
 # (docs/, partner_tools/, .claude/, PROVENANCE.md, ...) is fork-side material
 # that upstream never shipped, so it is not divergence in the rebase sense.
@@ -42,18 +49,53 @@ def sha256_file(path, limit_mb=512):
     return h.hexdigest()
 
 
+def report_binary(label, authority):
+    """Identify one authority without substituting another binary on failure.
+
+    PRESENT means the resolved file was hashed and answered `version`; it is
+    not a claim about build mode, source provenance, or compiler correctness.
+    """
+    resolved = os.path.realpath(authority)
+
+    def unavailable(reason):
+        print(f"{label}: {reason} — toolchain state UNKNOWN")
+        print(f"  authority: {authority}")
+        print(f"  resolved: {resolved}")
+
+    if not os.path.lexists(authority):
+        unavailable("ABSENT")
+        return
+    if not os.path.isfile(resolved):
+        unavailable("BROKEN POINTER" if os.path.islink(authority) and not os.path.exists(resolved)
+                    else "not a regular file")
+        return
+    try:
+        st = os.stat(resolved)
+        digest = sha256_file(resolved)
+        p = subprocess.run([resolved, "version"], cwd=REPO, capture_output=True,
+                           text=True, errors="replace", timeout=10)
+        if p.returncode != 0:
+            unavailable(f"zig version exited {p.returncode}; stderr: {p.stderr.strip()[:200]!r}")
+            return
+        ver = p.stdout.strip()
+        if not ver or len(ver.splitlines()) != 1:
+            unavailable("zig version returned an empty or multiline version")
+            return
+    except (OSError, subprocess.TimeoutExpired) as err:
+        unavailable(f"{type(err).__name__}: {err}")
+        return
+    mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    print(f"{label}: PRESENT")
+    print(f"  authority: {authority}")
+    print(f"  resolved: {resolved}")
+    print(f"  version: {ver}   size: {st.st_size} B   mtime: {mtime}")
+    print(f"  sha256: {digest}")
+
+
 def section_toolchain():
     print("== TOOLCHAIN ==")
-    if not os.path.isfile(STAGE3):
-        print(f"stage3: ABSENT at {STAGE3} — toolchain state UNKNOWN (not 'broken', not 'ok': unbuilt or moved)")
-        return
-    st = os.stat(STAGE3)
-    mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
-    rc, ver = run([STAGE3, "version"])
-    ver = ver if rc == 0 else f"UNKNOWN (zig version exited {rc})"
-    print(f"stage3: PRESENT  {STAGE3}")
-    print(f"  version: {ver}   size: {st.st_size} B   mtime: {mtime}")
-    print(f"  sha256: {sha256_file(STAGE3)}")
+    report_binary("production", PROMOTED)
+    report_binary("reference", REFERENCE_STAGE3)
 
 
 def base_commit():
@@ -114,14 +156,18 @@ def section_tree():
 
 
 def self_test():
-    """Prove the UNKNOWN arm fires: point at a nonexistent stage3 and confirm
-    the report says ABSENT/UNKNOWN rather than inventing a state."""
-    global STAGE3
-    real = STAGE3
-    STAGE3 = os.path.join(REPO, "build-safe", "stage3", "bin", "zig.DOES_NOT_EXIST")
-    ok_absent = not os.path.isfile(STAGE3)
-    section_toolchain()
-    STAGE3 = real
+    """Check the emitted UNKNOWN result, not merely the input's isfile predicate.
+
+    The sibling test_fork_status.py exercises the remaining failure paths with
+    isolated version stubs; this cheap check needs no fixture writes.
+    """
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        report_binary("production", os.path.join(REPO, "PROMOTED", "zig.DOES_NOT_EXIST"))
+    report = out.getvalue()
+    print(report, end="")
+    ok_absent = ("production: ABSENT" in report and "toolchain state UNKNOWN" in report
+                 and "PRESENT" not in report)
     root, _ = base_commit()
     ok_base = root is not None and len(root) == 40
     print(f"SELF-TEST: absent-toolchain arm fired: {ok_absent}; base resolvable: {ok_base}"

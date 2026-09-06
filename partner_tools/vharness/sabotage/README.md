@@ -5,9 +5,10 @@
 
 Four rows of the patch/005 V-list (**V3, V14, V-S2a, V-S2b**) are negative
 controls: they do not test that the compiler works, they test that a specific
-guard **fails loudly** when the thing it guards is broken. Each therefore needs
-a *sabotage rebuild* — a deliberately broken compiler, built, watched go red,
-and reverted.
+guard **fails loudly** when the thing it guards is broken. V3, V-S2a and V-S2b
+need a *sabotage compiler rebuild*. V14's library primitive can instead be
+checked by compiling a small probe against two isolated library copies (below).
+The primitive check does not prove the compiler's startup integration.
 
 **The harness cannot fire them.** `run_vlist.py` is not authorised to build a
 compiler, and a stage3 step is ≈21 minutes on this host. So these rows report
@@ -16,9 +17,11 @@ needs is here: one reviewed `.patch` per row, the guard it targets, the red text
 to expect, the stop rule, and the revert.
 
 What `run_vlist.py` *does* verify, live, on every pass: that each patch still
-applies to the current tree (`git apply --check`). That receipt proves the
-recipe is not stale. It is **not** the guard going red, and the rows say so in
-their own verdicts.
+applies to the current tree (`git apply --check`). That proves applicability
+only; it does not validate the recipe's expected result. The 2026-09-06 review
+found V14's old expected result impossible despite a clean patch check, and
+refreshed V-S2a/b's stale context. None of those dynamic controls ran in that
+correction wave: they remain **UNRUN / UNKNOWN**, as the rows report.
 
 ## Firing one, mechanically
 
@@ -28,7 +31,7 @@ with a delay timer.
 
 ```bash
 cd /K3D/GitHub/cgm-zig
-ROW=V14                                   # or V3, V-S2a, V-S2b
+ROW=V3                                    # or V-S2a, V-S2b; V14 primitive below
 PATCH=partner_tools/vharness/sabotage/<the .patch for $ROW>
 
 # 0. Machine courtesy, and the pristine checksum you will revert against.
@@ -75,24 +78,71 @@ beside the row.)
 | **Guard** | the affinity intersection inside `sysTopology`: `if (!maskIsSet(affinity, sib)) continue;` — the one line the file's own comment calls "the finding" |
 | **Sabotage** | delete that line, so sibling CPUs outside the mask are counted as members of a core the process cannot use |
 
-**Fire:**
+**Retired expectation, and why:** the old recipe expected `6 physical / 4
+logical` after removing the sibling filter. `sysTopology` still filters the
+outer CPU loop by affinity before incrementing `next_core`, so this sabotage
+cannot increase the physical count above the allowed logical count. Its
+observable defect is admitting excluded siblings into `sibling_map` and
+`threads_per_core`. An unchanged physical count is therefore not a failed
+control. The same old physical-count rationale remains in Topology's header;
+the implementation, rather than that comment, determines this witness.
 
-```bash
-taskset -c 0-3 build-sabotage-V14/stage3/bin/zig build-obj -fno-emit-bin \
-    -Mroot=build-vharness/fixtures/hello/hello.zig 2>&1 | head -1
-```
+**Minimal witness to prepare under a separate compile grant — UNRUN:**
 
-**Expected RED:** the report line says **`6 physical / 4 logical`** — more
-physical cores than logical CPUs, which is visibly impossible and is exactly
-what makes it a usable control. (The unsabotaged compiler reports
-`4 physical / 4 logical` under this pin; measured 2026-08-23, V1 row 3.)
+1. Read the process's current `os.sched_getaffinity(0)` and sysfs sibling
+   lists. Reuse `vlib.host_topology` / `expected_for_mask` and the existing
+   `TOPO_PROBE` in `partner_tools/vharness/fixtures/generate.py`, but derive the
+   mask instead of copying V-S1a's station-specific mask table. Choose one
+   currently allowed CPU `c < Topology.max_cpus` whose sysfs sibling group
+   contains another represented CPU. Set the test mask to the singleton `c`;
+   record that group and the excluded sibling IDs. This is a partial-SMT mask
+   even if the other siblings were already outside the process's initial
+   affinity. If no such group is available, report **UNKNOWN: no partial-SMT
+   witness**, never a passing row. If topology files cannot be read, report
+   UNKNOWN with that reason.
+2. In a fresh repo-local scratch directory, copy `lib/` twice, preserving its
+   layout: `lib-pristine/` and `lib-sabotaged/`. Use independent copies, never
+   hardlinks into the source or promoted library. Preserve the pristine file's
+   SHA-256. Remove only the patch's one sibling-filter line from
+   `lib-sabotaged/std/Thread/Topology.zig`, checking the anchor occurs once.
+   The layout is necessary because Topology imports `../std.zig`.
+3. Reuse the probe's `Topology.detect` call, passing a
+   `[Topology.max_cpus]Topology.CoreId` buffer through `.sibling_map = &map`.
+   Emit the existing `logical`, `physical`, `tpc` and `source` fields, plus
+   each non-`core_none` `(CPU ID, core ID)` entry. Compile that **same probe
+   source** twice using the unchanged `PROMOTED/zig`, `-OReleaseSafe`, and
+   respectively `--zig-lib-dir <scratch>/lib-pristine` and
+   `--zig-lib-dir <scratch>/lib-sabotaged`. Keep both cache directories and
+   output binaries under that scratch directory. Only two small executables
+   are needed; no stage3 rebuild is required to exercise the library code.
+4. Run both probe binaries under `taskset -c <derived c>`, recording exit,
+   full output and source/library hashes. Require `source=sys_topology` on
+   both; fallback to cpuinfo does not exercise the sabotaged function and is
+   UNKNOWN. The pristine oracle is `logical=1`, `physical=1`, `tpc=1`, with
+   exactly CPU `c` assigned a core. The sabotaged arm must retain
+   `logical=1`, `physical=1`, but report the raw represented sibling-group
+   size as `tpc` (>1), and map the excluded sibling IDs to `c`'s core.
+   Compare parsed fields and membership against the independently recorded
+   sysfs group; do not merely look for changed text.
 
-**Stop rule:** if the sabotaged build *still* reports `4 physical / 4 logical`,
-the intersection is not what produces the masked answer and V-S1a's seven-mask
-agreement is coincidence. Do not proceed on 005a until that is explained.
+**Expected RED:** the affinity-membership oracle rejects the sabotaged arm
+because excluded CPU IDs are assigned and `tpc` exceeds the singleton mask's
+one admitted sibling. The pristine arm passes the same oracle. If the
+sabotaged arm passes, or both arms fail, the control is invalid; investigate
+the chosen group, actual library selection and probe source before claiming
+the guard was exercised. A signal or unrelated failure is not this red.
 
-**Revert check:** `4 physical / 4 logical` returns, and the file's sha256 equals
-the PRE sha.
+**Revert check:** restore the scratch library's single changed file from
+the pristine bytes, verify its SHA-256, rebuild the same probe against that
+restored copy, and rerun the same oracle. It must pass again. Preserve all
+scratch receipts; production source, libraries and pointers stay untouched.
+
+**Scope/cost:** this is a proposed library-behavior witness, not a measured
+runtime or compiler-startup result. It needs two small probe builds and one
+restoration build; cost is **UNKNOWN until timed**. The harness's V14 row
+still only checks preparation and remains UNKNOWN until a separately
+reviewed receipt records an executed control. A later compiler-startup
+claim still needs its own rebuilt compiler and startup observation.
 
 ---
 

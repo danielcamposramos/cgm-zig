@@ -2,10 +2,9 @@
 # watched go red, and reverted. Full recipe, expected red text and revert step:
 # partner_tools/vharness/sabotage/README.md
 diff --git a/src/main.zig b/src/main.zig
-index a5a1e70..07c2c40 100644
 --- a/src/main.zig
 +++ b/src/main.zig
-@@ -8103,13 +8103,13 @@ fn setThreadLimit(arena: std.mem.Allocator, plan: ThreadPlan) Allocator.Error!vo
+@@ -8116,13 +8116,13 @@ fn setThreadLimit(arena: std.mem.Allocator, plan: ThreadPlan) Allocator.Error!vo
              // does above it.
              //
              // Only when there are at least two async slots to begin with: a reserve that
@@ -17,6 +16,6 @@ index a5a1e70..07c2c40 100644
          },
          .evented => {},
      }
-     // `plan.partitions` already carries `InternPool.init`'s `@max(_, 2)` floor
-     // (`InternPool.zig:6295`), applied where it can be reported rather than here where
-     // it could not be.
+     // ENFORCEMENT, at the site that actually creates the pool.
+     //
+     // `Id.allocate` below seeds the assignable-tid pool with `partitions - 1` ids. The

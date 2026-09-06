@@ -309,6 +309,12 @@ outdated_ready: struct {
     /// Does not contain `.func` units.
     other: std.AutoArrayHashMapUnmanaged(AnalUnit, void),
 } = .{ .funcs = .empty, .other = .empty },
+/// Optional mirrors of ready-map positions, never owners of membership. Unused
+/// in insertion mode. See readyPut/readySwapRemove and invalidateReadyRanks.
+ready_indexes: struct {
+    funcs: RankedReadyIndex = .{},
+    other: RankedReadyIndex = .{},
+} = .{},
 /// This contains a list of AnalUnit whose analysis or codegen failed, but the
 /// failure was something like running out of disk space, and trying again may
 /// succeed. On the next update, we will flush this list, marking all members of
@@ -423,20 +429,22 @@ pub const IncrementalDebugState = struct {
 
 pub const PerThread = @import("Zcu/PerThread.zig");
 pub const ModuleRanking = @import("Compilation/ModuleRanking.zig");
+/// Export the helper alongside ModuleRanking for a standalone production-code
+/// oracle without giving one source file two different module owners.
+pub const ReadyIndex = @import("Zcu/ReadyIndex.zig").ReadyIndex;
+const RankedReadyIndex = ReadyIndex(ModuleRanking.FileRank, readyRankBefore);
 
 /// ORDER 2 inside one compilation: which of the units that are ready to analyse goes
 /// next. Both members are always reachable; the flag exists so the choice is settled by
 /// measurement rather than taste.
 pub const AnalysisOrder = enum {
     /// Insertion order — `outdated_ready.funcs.keys()[0]`, exactly as upstream. THE
-    /// DEFAULT, and deliberately so: the layered member turns an O(1) pick into an O(n)
-    /// scan, `findOutdatedToAnalyze` is called once per `AnalUnit`, and no measurement of
-    /// that trade exists yet. Queued item V8 measures `cpu_ns_sema` under both; the
-    /// default flips only if layered wins, and the feature does not ship as a default if
-    /// it is net-negative.
+    /// DEFAULT. Layered now has an optional heap index; its end-to-end cost remains
+    /// a measurement, not a reason to change the default. This mode allocates and
+    /// maintains no ready index.
     insertion,
     /// Module composition depth ascending, module fan-in descending, a module's internal
-    /// files before its public root file, insertion order last. Never changes WHICH units
+    /// files before its public root file, current ready-map order last. Never changes WHICH units
     /// are analysed — only which ready one goes first.
     layered,
 };
@@ -2967,6 +2975,8 @@ pub fn deinit(zcu: *Zcu) void {
         zcu.outdated.deinit(gpa);
         zcu.outdated_ready.funcs.deinit(gpa);
         zcu.outdated_ready.other.deinit(gpa);
+        zcu.ready_indexes.funcs.deinit(gpa);
+        zcu.ready_indexes.other.deinit(gpa);
         zcu.retryable_failures.deinit(gpa);
 
         zcu.test_functions.deinit(gpa);
@@ -3210,10 +3220,7 @@ pub fn markDependeeOutdated(
                     deps_log.debug("outdated {f} => already outdated {f} po_deps={}", .{ zcu.fmtDependee(dependee), zcu.fmtAnalUnit(depender), po_dep_count.* });
                     if (po_dep_count.* == 0) {
                         deps_log.debug("outdated ready: {f}", .{zcu.fmtAnalUnit(depender)});
-                        switch (depender.unwrap()) {
-                            .func => |func| try zcu.outdated_ready.funcs.put(gpa, func, {}),
-                            else => try zcu.outdated_ready.other.put(gpa, depender, {}),
-                        }
+                        try zcu.readyPut(depender);
                     }
                 },
             }
@@ -3236,10 +3243,7 @@ pub fn markDependeeOutdated(
         deps_log.debug("outdated {f} => new outdated {f} po_deps={}", .{ zcu.fmtDependee(dependee), zcu.fmtAnalUnit(depender), new_po_dep_count });
         if (new_po_dep_count == 0) {
             deps_log.debug("outdated ready: {f}", .{zcu.fmtAnalUnit(depender)});
-            switch (depender.unwrap()) {
-                .func => |func| try zcu.outdated_ready.funcs.put(gpa, func, {}),
-                else => try zcu.outdated_ready.other.put(gpa, depender, {}),
-            }
+            try zcu.readyPut(depender);
         }
         // If this is a Decl and was not previously PO, we must recursively
         // mark dependencies on its tyval as PO.
@@ -3257,7 +3261,6 @@ pub fn markPoDependeeUpToDate(zcu: *Zcu, dependee: InternPool.Dependee) !void {
 }
 /// Assumes that `zcu.outdated_lock` is already held exclusively.
 fn markPoDependeeUpToDateInner(zcu: *Zcu, dependee: InternPool.Dependee) !void {
-    const gpa = zcu.comp.gpa;
     deps_log.debug("up-to-date dependee: {f}", .{zcu.fmtDependee(dependee)});
     var it = zcu.intern_pool.dependencyIterator(dependee);
     while (it.next()) |depender| {
@@ -3268,10 +3271,7 @@ fn markPoDependeeUpToDateInner(zcu: *Zcu, dependee: InternPool.Dependee) !void {
             deps_log.debug("up-to-date {f} => {f} po_deps={}", .{ zcu.fmtDependee(dependee), zcu.fmtAnalUnit(depender), po_dep_count.* });
             if (po_dep_count.* == 0) {
                 deps_log.debug("outdated ready: {f}", .{zcu.fmtAnalUnit(depender)});
-                switch (depender.unwrap()) {
-                    .func => |func| try zcu.outdated_ready.funcs.put(gpa, func, {}),
-                    else => try zcu.outdated_ready.other.put(gpa, depender, {}),
-                }
+                try zcu.readyPut(depender);
             }
             continue;
         }
@@ -3328,10 +3328,7 @@ fn markTransitiveDependersPotentiallyOutdated(zcu: *Zcu, maybe_outdated: AnalUni
         if (zcu.outdated.getPtr(po)) |po_dep_count| {
             // This dependency is already outdated, but it now has one more PO dependency.
             if (po_dep_count.* == 0) {
-                switch (po.unwrap()) {
-                    .func => |func| _ = zcu.outdated_ready.funcs.swapRemove(func),
-                    else => _ = zcu.outdated_ready.other.swapRemove(po),
-                }
+                _ = zcu.readySwapRemove(po);
             }
             po_dep_count.* += 1;
             deps_log.debug("po {f} => {f} [outdated] po_deps={}", .{ zcu.fmtDependee(dependee), zcu.fmtAnalUnit(po), po_dep_count.* });
@@ -3350,25 +3347,108 @@ fn markTransitiveDependersPotentiallyOutdated(zcu: *Zcu, maybe_outdated: AnalUni
     }
 }
 
-/// Index of the ready unit to analyse next.
-///
-/// `.insertion` is `0` -- upstream's pick, O(1), and the default. `.layered` is an argmin
-/// over the ready tier by `(module depth ASC, module fan-in DESC, internal-before-facade,
-/// insertion ASC)`.
-///
-/// **The O(n) scan is this feature's whole cost, and it is not hand-waved.** This is
-/// called once per `AnalUnit` -- potentially millions of times on a large compilation --
-/// so an argmin over the ready set is O(n) where upstream is O(1). Two things bound it:
-/// the ready tier is the units whose dependencies are already satisfied, not the whole
-/// outdated set; and the per-unit `AnalUnit -> file -> module` chase is memoised per FILE
-/// in `zcu.file_rank_memo`, so the scan is a handful of hash lookups rather than a
-/// pointer walk each. Whether that is enough is a MEASUREMENT, not an opinion: queued
-/// item V8 compares `cpu_ns_sema` under both members on the same workload, and `layered`
-/// does not become the default unless it wins. Until then this code is unreachable
-/// without the flag.
+fn readyRankBefore(a: ModuleRanking.FileRank, b: ModuleRanking.FileRank) bool {
+    return ModuleRanking.before(a.rank, a.facade, b.rank, b.facade);
+}
+
+/// The only module-ownership reassignment happens during computeAliveFiles in
+/// each update. Clear both derived structures BEFORE that update can mutate
+/// files, including failure paths. The immutable ModuleRanking itself is built
+/// once during Compilation.create, before any index is prepared.
+pub fn invalidateReadyRanks(zcu: *Zcu) void {
+    if (zcu.analysis_order == .insertion) return;
+    zcu.file_rank_memo.clearRetainingCapacity();
+    zcu.ready_indexes.funcs.invalidate();
+    zcu.ready_indexes.other.invalidate();
+}
+
+fn readyIndexForKey(zcu: *Zcu, comptime Key: type) *RankedReadyIndex {
+    return switch (Key) {
+        InternPool.Index => &zcu.ready_indexes.funcs,
+        AnalUnit => &zcu.ready_indexes.other,
+        else => @compileError("unsupported ready key " ++ @typeName(Key)),
+    };
+}
+
+fn readyKeyAppended(zcu: *Zcu, key: anytype) void {
+    if (zcu.analysis_order == .insertion) return;
+    const index = zcu.readyIndexForKey(@TypeOf(key));
+    // Before the first pick, a single heapify is cheaper than indexing each
+    // initial append. Disabled epochs also stay on the original scan.
+    if (!index.isActive()) return;
+    const rank = zcu.indexableUnitRank(toAnalUnit(key)) orelse return index.disable();
+    index.append(zcu.gpa, rank);
+}
+
+fn readyPutKey(zcu: *Zcu, map: anytype, key: anytype) Allocator.Error!void {
+    if (zcu.analysis_order == .insertion) return map.put(zcu.comp.gpa, key, {});
+    const old_count = map.count();
+    try map.put(zcu.comp.gpa, key, {});
+    if (map.count() != old_count) zcu.readyKeyAppended(key);
+}
+
+fn readyPut(zcu: *Zcu, unit: AnalUnit) Allocator.Error!void {
+    switch (unit.unwrap()) {
+        .func => |func| try zcu.readyPutKey(&zcu.outdated_ready.funcs, func),
+        else => try zcu.readyPutKey(&zcu.outdated_ready.other, unit),
+    }
+}
+
+/// Call only after the existing authoritative-map capacity reservations. An
+/// auxiliary OOM disables the index; it cannot turn a committed ready unit into
+/// missing work or change the map's allocation-error behavior.
+pub fn readyPutAssumeCapacityNoClobber(zcu: *Zcu, unit: AnalUnit) void {
+    switch (unit.unwrap()) {
+        .func => |func| {
+            zcu.outdated_ready.funcs.putAssumeCapacityNoClobber(func, {});
+            zcu.readyKeyAppended(func);
+        },
+        else => {
+            zcu.outdated_ready.other.putAssumeCapacityNoClobber(unit, {});
+            zcu.readyKeyAppended(unit);
+        },
+    }
+}
+
+fn readySwapRemoveKey(zcu: *Zcu, map: anytype, key: anytype) bool {
+    if (zcu.analysis_order == .insertion) return map.swapRemove(key);
+    const map_index = map.getIndex(key) orelse return false;
+    zcu.readyIndexForKey(@TypeOf(key)).swapRemoveAt(map_index);
+    map.swapRemoveAt(map_index);
+    return true;
+}
+
+fn readySwapRemove(zcu: *Zcu, unit: AnalUnit) bool {
+    return switch (unit.unwrap()) {
+        .func => |func| zcu.readySwapRemoveKey(&zcu.outdated_ready.funcs, func),
+        else => zcu.readySwapRemoveKey(&zcu.outdated_ready.other, unit),
+    };
+}
+
+/// Index of the ready unit to analyse next. The original layered O(n) scan
+/// remains the OOM/transient-rank fallback and sequence oracle. Ordinary indexed
+/// picks are O(1), mutations O(log n), with one O(n) build per rank epoch/tier.
+/// Ties use current map position: swapRemove changes that position, so a FIFO
+/// insertion counter would silently choose a different sequence.
 fn readyPick(zcu: *Zcu, keys: anytype) usize {
     if (zcu.analysis_order == .insertion) return 0;
     if (zcu.module_ranking == null) return 0;
+    const Context = struct {
+        owner: *Zcu,
+        items: @TypeOf(keys),
+
+        fn rank(ctx: @This(), i: usize) ?ModuleRanking.FileRank {
+            return ctx.owner.indexableUnitRank(toAnalUnit(ctx.items[i]));
+        }
+    };
+    const index = zcu.readyIndexForKey(@typeInfo(@TypeOf(keys)).pointer.child);
+    if (index.prepare(zcu.gpa, keys.len, Context{ .owner = zcu, .items = keys }, Context.rank)) {
+        return index.peek().?;
+    }
+    return zcu.readyPickScan(keys);
+}
+
+fn readyPickScan(zcu: *Zcu, keys: anytype) usize {
     var best: usize = 0;
     var best_rank = zcu.analUnitFileRank(toAnalUnit(keys[0]));
     for (keys[1..], 1..) |key, i| {
@@ -3399,6 +3479,10 @@ fn toAnalUnit(key: anytype) AnalUnit {
 /// UNKNOWN and sort last, which is the conservative choice -- treating an unlocatable
 /// unit as a leaf would promote it past every unit that was actually ranked.
 fn analUnitFileRank(zcu: *Zcu, unit: AnalUnit) ModuleRanking.FileRank {
+    return zcu.indexableUnitRank(unit) orelse .unknown;
+}
+
+fn indexableUnitRank(zcu: *Zcu, unit: AnalUnit) ?ModuleRanking.FileRank {
     const ip = &zcu.intern_pool;
     const file_index: File.Index = switch (unit.unwrap()) {
         .nav_val, .nav_ty => |nav| zcu.navFileScopeIndex(nav),
@@ -3409,13 +3493,17 @@ fn analUnitFileRank(zcu: *Zcu, unit: AnalUnit) ModuleRanking.FileRank {
     return zcu.fileRank(file_index);
 }
 
-fn fileRank(zcu: *Zcu, file_index: File.Index) ModuleRanking.FileRank {
+fn fileRank(zcu: *Zcu, file_index: File.Index) ?ModuleRanking.FileRank {
     if (zcu.file_rank_memo.get(file_index)) |r| return r;
     const ranking = zcu.module_ranking.?;
     const file = zcu.fileByIndex(file_index);
     // `File.mod` is null until `computeAliveFiles` stamps it. A file analysed before it
     // was stamped is unlocatable, not a leaf.
-    const mod = file.mod orelse return .unknown;
+    // Missing ownership can become known later. Do not freeze that transient
+    // unknown in a heap: the caller disables indexing for this epoch and the
+    // original scan keeps observing live ranks. Source-less unit kinds above
+    // return a stable .unknown and can still be indexed.
+    const mod = file.mod orelse return null;
     const root = zcu.module_roots.get(mod) orelse File.Index.Optional.none;
     const result: ModuleRanking.FileRank = .{
         .rank = ranking.get(mod),
@@ -3752,7 +3840,7 @@ pub fn ensureFuncBodyAnalysisQueued(zcu: *Zcu, func: InternPool.Index) !void {
         try zcu.outdated.ensureUnusedCapacity(gpa, 1);
         try zcu.outdated_ready.funcs.ensureUnusedCapacity(gpa, 1);
         zcu.outdated.putAssumeCapacityNoClobber(.wrap(.{ .func = func }), 0);
-        zcu.outdated_ready.funcs.putAssumeCapacityNoClobber(func, {});
+        zcu.readyPutAssumeCapacityNoClobber(.wrap(.{ .func = func }));
     }
 }
 
@@ -3769,8 +3857,8 @@ pub fn ensureNavValAnalysisQueued(zcu: *Zcu, nav: InternPool.Nav.Index) !void {
         try zcu.outdated_ready.other.ensureUnusedCapacity(gpa, 2);
         zcu.outdated.putAssumeCapacityNoClobber(.wrap(.{ .nav_val = nav }), 0);
         zcu.outdated.putAssumeCapacityNoClobber(.wrap(.{ .nav_ty = nav }), 0);
-        zcu.outdated_ready.other.putAssumeCapacityNoClobber(.wrap(.{ .nav_val = nav }), {});
-        zcu.outdated_ready.other.putAssumeCapacityNoClobber(.wrap(.{ .nav_ty = nav }), {});
+        zcu.readyPutAssumeCapacityNoClobber(.wrap(.{ .nav_val = nav }));
+        zcu.readyPutAssumeCapacityNoClobber(.wrap(.{ .nav_ty = nav }));
     }
 }
 
@@ -3786,7 +3874,7 @@ pub fn queueComptimeUnitAnalysis(zcu: *Zcu, cu: InternPool.ComptimeUnit.Id) Allo
     try zcu.outdated.ensureUnusedCapacity(gpa, 1);
     try zcu.outdated_ready.other.ensureUnusedCapacity(gpa, 1);
     zcu.outdated.putAssumeCapacityNoClobber(unit, 0);
-    zcu.outdated_ready.other.putAssumeCapacityNoClobber(unit, {});
+    zcu.readyPutAssumeCapacityNoClobber(unit);
 }
 
 /// If `unit` was marked as outdated or porentially outdated, clears that status and returns `true`.
@@ -3796,10 +3884,7 @@ pub fn clearOutdatedState(zcu: *Zcu, unit: AnalUnit) bool {
     if (std.debug.runtime_safety) zcu.outdated_lock.lockUncancelable(io);
     defer if (std.debug.runtime_safety) zcu.outdated_lock.unlock(io);
     if (zcu.outdated.fetchSwapRemove(unit)) |kv| {
-        const was_ready = switch (unit.unwrap()) {
-            .func => |func| zcu.outdated_ready.funcs.swapRemove(func),
-            else => zcu.outdated_ready.other.swapRemove(unit),
-        };
+        const was_ready = zcu.readySwapRemove(unit);
         if (kv.value == 0) {
             assert(was_ready);
         } else {

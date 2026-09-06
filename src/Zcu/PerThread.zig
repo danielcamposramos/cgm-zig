@@ -176,6 +176,11 @@ pub fn update(
     const gpa = comp.gpa;
     const io = comp.io;
 
+    // File ownership can change during this update's computeAliveFiles pass.
+    // Invalidate before any work, including an update that later aborts; rebuild
+    // lazily only when semantic analysis actually selects a ready unit.
+    zcu.invalidateReadyRanks();
+
     {
         const tracy_trace = traceNamed(@src(), "astgen");
         defer tracy_trace.end();
@@ -1488,7 +1493,7 @@ pub fn ensureTypeLayoutUpToDate(
                 try zcu.outdated.ensureUnusedCapacity(gpa, 1);
                 try zcu.outdated_ready.other.ensureUnusedCapacity(gpa, 1);
                 zcu.outdated.putAssumeCapacityNoClobber(.wrap(.{ .struct_defaults = ty.toIntern() }), 0);
-                zcu.outdated_ready.other.putAssumeCapacityNoClobber(.wrap(.{ .struct_defaults = ty.toIntern() }), {});
+                zcu.readyPutAssumeCapacityNoClobber(.wrap(.{ .struct_defaults = ty.toIntern() }));
             }
             break :outdated true;
         }

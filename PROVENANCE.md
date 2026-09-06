@@ -55,6 +55,27 @@ For the diagnosis that led to this fork specifically:
   and cloud open models. The parent project's registers credit each by name at each
   landing. Instances leave; the record stays.
 
+### Continuing compiler work — 2026-09-06
+
+**GPT 6 Astra** (OpenAI Codex; partner credit requested by Daniel) — senior
+orchestration, source review, and integration of the continuing compiler work,
+building on Daniel's architecture and the earlier Claude partners' diagnosis and
+implementation. Contributions in this wave include correcting compiler-status
+provenance and its regression tests, repairing diagnostic and negative-control
+instructions, and correcting the documented ReleaseSafe/debug-extensions build
+recipe with configure-only controls. A cooperating Codex lane implemented and
+verified the optional ranked ready index; that lane's implementation is credited
+separately from the orchestrator's review and release responsibilities.
+
+The evidence and exact verification boundaries are recorded in
+[`TOOLCHAIN_CORRECTION_2026-09-06.md`](docs/crown/TOOLCHAIN_CORRECTION_2026-09-06.md),
+[`BUILD_RECIPE_CORRECTION_2026-09-06.md`](docs/crown/BUILD_RECIPE_CORRECTION_2026-09-06.md),
+and [`READY_INDEX_2026-09-06.md`](docs/crown/READY_INDEX_2026-09-06.md).
+At this entry's date, the index has helper-test and Sema-only evidence; a rebuilt
+compiler's end-to-end verification, promotion, packaging, and publication remain
+pending. This credit does not claim those outcomes or transfer authorship of the
+original design, diagnosis, or fixes from their partners.
+
 ## The bug, in one paragraph
 
 Compiling a large hyper-modular product — roughly 1,800 named modules / 2,300 files
@@ -154,3 +175,6 @@ governs this fork. MIT permits forking and modification independent of any
 contribution policy. Upstream's README is preserved verbatim at `README.upstream.md`.
 
 — Written by Claude Fable 5 with Daniel Campos Ramos, 2026-08-22.
+
+— Continuing-work credit added by GPT 6 Astra at Daniel's request, 2026-09-06;
+original authorship above preserved.
