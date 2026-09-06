@@ -45,14 +45,25 @@ test {
 
 const thread_stack_size = 60 << 20;
 
+// Runtime output policy, independent of std.log's compile-time admission gate.
+const default_log_level: std.log.Level = switch (builtin.mode) {
+    .Debug => .debug,
+    .ReleaseSafe, .ReleaseFast => .info,
+    .ReleaseSmall => .err,
+};
+
 pub const std_options: std.Options = .{
     .logFn = log,
 
-    .log_level = switch (builtin.mode) {
-        .Debug => .debug,
-        .ReleaseSafe, .ReleaseFast => .info,
-        .ReleaseSmall => .err,
-    },
+    // std.log rejects disabled levels before calling our runtime scope filter.
+    // Admit debug bodies only in a logging-enabled compiler; the filter below
+    // still requires --debug-log for debug (and above-default) messages.
+    .log_level = if (build_options.enable_logging)
+        .debug
+    else if (default_log_level == .debug)
+        .info
+    else
+        default_log_level,
 };
 pub const std_options_cwd = if (native_os == .wasi) wasi_cwd else null;
 
@@ -144,10 +155,12 @@ pub fn log(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    // Hide debug messages unless:
+    // Hide debug and above-default messages unless:
     // * logging enabled with `-Dlog`.
     // * the --debug-log arg for the scope has been provided
-    if (@intFromEnum(level) > @intFromEnum(std.options.log_level) or
+    // Use the original mode policy, not the widened compile-time admission gate;
+    // in particular, ReleaseSmall still emits only errors by default.
+    if (@intFromEnum(level) > @intFromEnum(default_log_level) or
         @intFromEnum(level) > @intFromEnum(std.log.Level.info))
     {
         if (!build_options.enable_logging) return;
