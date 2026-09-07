@@ -174,11 +174,20 @@ def _decode(b):
     return b.decode("utf-8", errors="replace") if b is not None else ""
 
 
-def run_cmd(cmd, cwd=None, env=None, mask=DEFAULT_MASK, timeout=300, rss=False):
+def run_cmd(cmd, cwd=None, env=None, mask=DEFAULT_MASK, timeout=300, rss=False, *, on_spawn=None):
     """Run `cmd`, always under `taskset -c <mask>` unless mask is None.
 
     `rss=True` wraps in `/usr/bin/time -v` to obtain peak RSS; if GNU time is
     absent the field stays None (UNKNOWN) rather than becoming 0.
+
+    on_spawn(p), when supplied, runs once after Popen and before communicate.
+    It must not wait/poll/reap the child or block for observation. Its cost stays
+    inside wall. A callback exception is NOT swallowed: the same exception is
+    re-raised after best-effort owned-child cleanup, with cgm_run_cmd_cleanup
+    attached. Instrument adapters must record their own recoverable failures.
+
+    Acknowledged lifecycle correction: unexpected communication/interruption
+    errors now receive that same cleanup. The historical timeout path is intact.
     """
     full = list(cmd)
     time_out_file = None
@@ -201,20 +210,78 @@ def run_cmd(cmd, cwd=None, env=None, mask=DEFAULT_MASK, timeout=300, rss=False):
     p = subprocess.Popen(full, cwd=cwd, env=env, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, start_new_session=True)
     try:
-        out, err = p.communicate(timeout=timeout)
-        rc, to = p.returncode, False
-    except subprocess.TimeoutExpired:
+        if on_spawn is not None:
+            on_spawn(p)
         try:
-            os.killpg(os.getpgid(p.pid), 15)
-            time.sleep(2)
-            os.killpg(os.getpgid(p.pid), 9)
-        except (ProcessLookupError, PermissionError):
-            pass
-        try:
-            out, err = p.communicate(timeout=30)
+            out, err = p.communicate(timeout=timeout)
+            rc, to = p.returncode, False
         except subprocess.TimeoutExpired:
-            out, err = b"", b""
-        rc, to = 124, True
+            try:
+                os.killpg(os.getpgid(p.pid), 15)
+                time.sleep(2)
+                os.killpg(os.getpgid(p.pid), 9)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                out, err = p.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                out, err = b"", b""
+            rc, to = 124, True
+    except BaseException as original:
+        cleanup = {"pid": p.pid, "stages": [], "reaped": False}
+
+        def stage(name, action):
+            try:
+                value = action()
+                cleanup["stages"].append({"stage": name, "status": "completed"})
+                return True, value
+            except BaseException as error:
+                cleanup["stages"].append({"stage": name, "status": "UNKNOWN",
+                    "kind": type(error).__name__, "errno": getattr(error, "errno", None)})
+                return False, None
+
+        def signal_owned(sig):
+            if p.returncode is not None:
+                return "already_reaped_no_signal"
+            # WNOWAIT proves this is still our waitable direct child without
+            # releasing its PID. Never poll/reap between this check and killpg.
+            # A callback/other thread must not independently reap this child.
+            child_state = os.waitid(os.P_PID, p.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if child_state is not None and child_state.si_pid != p.pid:
+                cleanup["ownership_refusal"] = "waitable_child_identity_mismatch"
+                raise RuntimeError("waitable_child_identity_mismatch")
+            if os.getpgid(p.pid) != p.pid:
+                cleanup["ownership_refusal"] = "process_group_identity_mismatch"
+                raise RuntimeError("owned_group_identity_mismatch")
+            os.killpg(p.pid, sig)
+            return "signal_sent"
+
+        ok, action = stage("term_owned_group", lambda: signal_owned(15))
+        cleanup["term_action"] = action
+        if ok and action == "signal_sent":
+            stage("term_grace", lambda: time.sleep(2))
+        ok, action = stage("kill_owned_group", lambda: signal_owned(9))
+        cleanup["kill_action"] = action
+        ok, code = stage("reap_owned_child", lambda: p.wait(timeout=30))
+        cleanup["reaped"] = ok
+        cleanup["returncode"] = code if ok else None
+        # Only pipes belonging to this Popen; failures remain separate from the
+        # original launch/callback/communication exception and never replace it.
+        for name in ("stdin", "stdout", "stderr"):
+            stream = getattr(p, name, None)
+            if stream is not None:
+                stage("close_" + name, stream.close)
+        try:
+            original.cgm_run_cmd_cleanup = cleanup
+            original.add_note("cgm-zig owned cleanup: " + json.dumps(cleanup))
+        except BaseException:
+            # Exotic exception objects may refuse attributes/notes. Preserve
+            # their identity and disclose the numeric cleanup receipt anyway.
+            try:
+                print("cgm-zig owned cleanup: " + json.dumps(cleanup), file=sys.stderr)
+            except BaseException:
+                pass  # Last-resort reporting cannot mask the original exception.
+        raise
     wall = time.monotonic() - t0
 
     peak = None
