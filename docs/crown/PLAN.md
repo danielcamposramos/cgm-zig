@@ -55,6 +55,17 @@ materialized locally, with 0/12 timed compiles run. Three CPU-activity holds
 prevented launch, not failed timing samples. Package, companion evidence bundle,
 online main synchronization, release and promotion remain open.
 
+Superseding executed-cost status 2026-09-07: preserve the earlier 0/12 note
+as history. The [executed cost receipt](READY_INDEX_RELEASE_COST_RECEIPT_2026-09-07.md)
+records 12/12 successful compiles, 13 non-launch holds and no retry/replacement.
+All three wall comparisons are inside the existing heuristic; old/default
+still wins 3/3 slots and candidate default median RSS is +356 KiB. The
+clean-machine criterion is UNFULFILLED, not waived: this is environment-qualified
+descriptive evidence, not promotion clearance. Unpromoted candidate staging
+and smoke verification may proceed separately; package/evidence,
+publication/main-sync, release and system-default gates remain open and
+unexecuted in this packet. No crown stage or foundation completion is implied.
+
 ## The problem, measured
 
 Zig performs whole-closure semantic analysis per compilation unit: one `build-exe`

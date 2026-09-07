@@ -130,6 +130,18 @@ is materialized locally, but 0/12 timed compiles have run. Three CPU-activity ho
 prevented launch; neither is a failed timing sample. Package, companion evidence
 bundle, online main synchronization, release and promotion remain open.
 
+Superseding executed-cost status 2026-09-07: the earlier 0/12 note is retained
+as history. The [executed cost receipt](docs/crown/READY_INDEX_RELEASE_COST_RECEIPT_2026-09-07.md)
+now records 12/12 successful compiles and 13 retained non-launch holds, without
+retries or replacement samples. All three wall comparisons fall inside the
+existing heuristic, but old/default wins 3/3 paired slots and the candidate's
+median default RSS is +356 KiB. The clean-machine criterion remains
+UNFULFILLED: these are ambient-workstation-qualified observations, not
+performance equivalence or promotion clearance. Candidate packaging may be
+staged and smoke-verified separately while unpromoted; package/evidence,
+publication/main-sync, release and system-default gates remain open and
+unexecuted in this packet. No foundation or crown stage is declared complete.
+
 The same commit corrects status-tool promotion authority, diagnostic/sabotage
 instructions and the documented ReleaseSafe build switches. The fresh candidate
 build uses safety checks, debug extensions, logging and a baseline CPU target;
