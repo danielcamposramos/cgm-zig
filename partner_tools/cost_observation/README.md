@@ -489,3 +489,187 @@ and `test_observe.py` remain byte-identical to the prior successor's seals.
 This is not yet a verified actual GNU-time/target-process integration, an
 environmentally accepted compiler sample, or promotion clearance. The original
 four non-compiler controls and twelve compiler samples were not rerun or replaced.
+
+## Executed wrapped busy/idle pair — 2026-09-07
+
+This additive receipt supersedes only the preceding **not yet live-verified**
+integration status. Root executed exactly **one** invocation of
+[wrapped_controls.py](wrapped_controls.py), completing **2/2 new noncompiler
+children**, busy then idle, through the real `LaunchObservation` → `vlib.run_cmd`
+→ taskset → GNU time → Python-child path. The invocation returned 0 with zero
+retries. The original four controls and twelve compiler samples remain separate,
+unchanged observations. This is not execution of the prospective sixteen-run
+compiler packet or acceptance of its policy.
+
+The [root PRE](../../build-ready-runtime/cost-observer-wrapped-2026-09-07/ROOT_PRE.json)
+is dated `2026-09-07 07:30:18 UTC`; the
+[root POST](../../build-ready-runtime/cost-observer-wrapped-2026-09-07/ROOT_POST.json)
+is dated `2026-09-07T07:33:05.649Z`. They identify integration commit
+`ea6cfeb53897270f8a1780d3e272b09c153d66c7` and three additional frozen control
+files, not part of that commit at execution. These are local source/run
+identities, not a publication statement.
+
+Before this live pair, the control author reported **17/17 new mocked test
+methods passed**, including fifteen named negative-analysis subcases within the
+tests, plus **80/80 existing regression tests passed with 2/2 host methods
+skipped**. Those are author-run results recorded in ROOT_PRE, not tests rerun by
+root or by this receipt's author. The live pair below is a distinct root-run
+instrument check; it is not a replacement for the mocked failure cases.
+
+### Actual command, work and measured coverage
+
+Root invoked, from `/K3D/GitHub/cgm-zig`:
+
+```sh
+LC_ALL=C python3 -B -m partner_tools.cost_observation.wrapped_controls --execute --log-root /K3D/GitHub/cgm-zig/build-ready-runtime/cost-observer-wrapped-2026-09-07/gnu-time
+```
+
+The caller banked stdout/stderr separately. The driver used the inherited
+environment with `LC_ALL=C` and child `env=None`; no full environment or raw
+execve capture is claimed. The sealed actual interpreter was `/usr/bin/python3`.
+Each child had affinity `[4]`, a 50 ms observer interval, a 200-snapshot cap and
+a ten-second existing-runner timeout. Root's earlier preflight and all 4/4
+in-driver before/after screens found zero matching compiler processes; these
+are pattern/queue observations, not whole-host idleness.
+
+[control_workload.py](control_workload.py) reused the earlier `sum(range(2000))`
+work, targeting 0.35 process-CPU seconds with a two-second wall ceiling for busy;
+idle slept 0.5 seconds. Fixed 0.5-second pre/post holds replaced the old stdin
+handshake. Both actual holds in each child were at least 0.5 seconds. The
+independent child `process_time_ns()` endpoints were compared with the observed
+`/proc` CPU-tick differences across a contiguous matched chain enclosing the
+work. The existing three-tick allowance at 100 Hz is **instrument endpoint/
+quantization slack**, not a compiler-performance tolerance.
+
+| Actual observation | Busy | Idle |
+|---|---:|---:|
+| Child PID / start ticks | 2124719 / 4153985 | 2124807 / 4154134 |
+| Launched wrapper PID / start ticks | 2124718 / 4153985 | 2124806 / 4154134 |
+| Raw snapshots / adjacent intervals | 29 / 28 | 32 / 31 |
+| Matched target snapshots / all snapshots | 27 / 29 | 30 / 32 |
+| Work-chain sample indexes, inclusive | 10–18 | 10–21 |
+| Work-chain samples / intervals | 9 / 8 | 12 / 11 |
+| Requested / captured PID observations | 83 / 83 | 92 / 92 |
+| Discovery probes | 58 | 64 |
+| Work-chain CPU ticks / independent CPU seconds | 36 / 0.350012889 | 0 / 0.000015920 |
+| Collection/snapshot errors | 0 / 29 snapshots | 0 / 32 snapshots |
+| Adapter errors / lifecycle events | 0 / 0 | 0 / 0 |
+| Discovery errors / probes | 2 / 58 | 2 / 64 |
+| Missed deadlines / collections | 0 / 29 | 0 / 32 |
+| Sampling-thread CPU, ns | 44085219 | 44176731 |
+| Observation duration, ns | 1384397659 | 1534281969 |
+| Sampling CPU / elapsed, one-CPU fraction | 0.03184433223604577 | 0.028793097939352762 |
+| Collection wall time summed, ns | 42694525 | 42844883 |
+| Existing Run wall, seconds | 1.3827837299977546 | 1.5327403519986547 |
+| GNU time wall / peak RSS, KiB | 1.38 s / 13468 | 1.53 s / 13524 |
+| Child/GNU-time exit / observer joined | 0 / 0 / yes | 0 / 0 / yes |
+
+The complete output has **6/6 JSONL records**: pair PRE, busy raw, busy analysis,
+idle raw, idle analysis, pair completion. Together they retain **61 snapshots,
+122 discovery probes, 59 adjacent intervals and 175/175 requested PID captures**.
+Each raw record precedes its analysis result. The receipt author parsed every
+JSONL record, re-derived all 7,670 aggregate/per-core CPU-state deltas across the
+59 intervals, checked all 57 matched snapshot joins against their two discovery
+probes and raw child rows, and independently recovered the 36/0 work-chain ticks
+and child-clock values. This did not invoke the production analyzer or launch a
+child. Both final collections began after their recorded stop requests.
+
+Zero snapshot/adapter errors must not conceal the discovery errors. Busy probes
+56/57 and idle probes 62/63 each report `FileNotFoundError`, errno 2, at the
+wrapper stage: **four expected final wrapper ENOENT observations in total**.
+The discovery status counts are busy `2 not_launched + 54 matched_direct_child
++ 2 incomplete_discovery`, idle `2 + 60 + 2` respectively. The first and final
+snapshots of each control therefore have no matched target association.
+Startup/exit coverage and between-probe execution remain UNKNOWN. A returned
+or reaped direct wrapper does not prove all possible group descendants exited.
+
+The sampling CPU measurements are **44.085219 ms / 1.384397659 s ≈ 3.1844%**
+and **44.176731 ms / 1.534281969 s ≈ 2.8793%** of one CPU's elapsed capacity.
+They are actual instrument cost during these held controls, not a general
+low-perturbation bound or a paired cost comparison with earlier controls.
+Notification cost is separately retained; discovery occurs inside collection
+cost. Nothing is subtracted. Run wall includes the existing wrapper/launch path,
+GNU-time overhead and child startup/holds/work; GNU time retains its own child
+resource interval. The adapter's monotonic call window is conservatively
+enclosing, not an exact exec interval. The analysis fields named `launch_gap_ns`
+and `exit_gap_ns` reference the chosen **work-chain** endpoints inside the holds,
+not necessarily the first or last discovered target observation.
+
+### Seals and immutable evidence
+
+All **13/13 source** and **4/4 tool** identities/hashes agree between the pair
+PRE, both controls' before/after banks, and this receipt's read-only check.
+The JSONL preserves their full numeric file identities and complete source path
+set. The source rows below are relative to the public repository; these are
+exact input seals, not a claim to seal the Python standard library or host OS.
+
+```text
+7f760e627eadce63b48fa4d13fb8fd87b9dd617d52670fa1ecae256314f40a80  partner_tools/cost_observation/__init__.py
+419f96bf12e416c70cb8f691c930aebf0e6bf5cd1a03aace8f7ce3bc279e4c70  partner_tools/cost_observation/control_workload.py
+5fde51779ad52b01b025adf3fa6a4ab7e868a0a2b997ed873f0ec4602f8d4d20  partner_tools/cost_observation/launch.py
+9a45a8fd2201deae787dafa80badd18b652fa9e3a13dc3ab42e79dd12b1e6cbf  partner_tools/cost_observation/observe.py
+3eaf4a4e3da01600d23eeb9e56b00ddda56b2d1513cc252c2b66491de5a14caa  partner_tools/cost_observation/owned_process.py
+68fda1dce5fc3d8e6321c47fcbaa0e57d54c884870406fb6cd7968c7bcb9afcc  partner_tools/cost_observation/procfs.py
+6eb5624471be305b55cfa749835484e81e8ae054e74e4aef3ac921eb991cea93  partner_tools/cost_observation/test_launch.py
+d88f3f1b9a5bbb1487e9fa284e8b7f56c16287330c362a91767a018a445d2bd1  partner_tools/cost_observation/test_observe.py
+a1dcbf8cc0f0ac374d7004d7a9dd9339cde33ef3c4adbe2a0c6626c62e394cbb  partner_tools/cost_observation/test_owned_process.py
+48629a8f81ddf9da79fec85bfb175a27d2cf9212a7d8bd801627ed3cfa469388  partner_tools/cost_observation/test_wrapped_controls.py
+f9a4c28b891b251a3172810491441295a9ffe187c0bb12e1e7a2d2a58aa997b9  partner_tools/cost_observation/wrapped_controls.py
+5c65c3cf9ad7bb8a264fb7b6700978eda1cf8775544458f8dc8e98ec81473062  partner_tools/oracle_lib.py
+c4cd16f49d19d7cc7886ae8ef9135634dc96ff5bb311c939970091b69888dcd3  partner_tools/vharness/vlib.py
+b942f1aa7cd611419e4c08ae2f0985a7f7c89502ce635811661df87ee902fee0  /usr/bin/pgrep
+4b30993b48ddd48bd4ee1b06c9ba4cdcf010bb06253ee518d8961b214231de41  /usr/bin/python3
+46d4e1a683dc33209232e738afed6bce4c64de60f90e89d245273aa1dad2ed50  /usr/bin/taskset
+6a1994aecdf6bbabe1f220965f5b5c3c5845d04d93afaeed6368b9edac1d9a0a  /usr/bin/time
+```
+
+These are retained **LOCAL** records, not newly published artifacts. Every
+listed file was read completely and its bytes/hash checked; both raw GNU-time
+files also match the embedded raw output and hash in the JSONL.
+
+| LOCAL evidence | Bytes | SHA-256 |
+|---|---:|---|
+| [ROOT_PRE.json](../../build-ready-runtime/cost-observer-wrapped-2026-09-07/ROOT_PRE.json) | 2487 | `fa51eb7004600d136fe3ed939c90e93cae9e66122e456e384e715d19888b6733` |
+| [ROOT_POST.json](../../build-ready-runtime/cost-observer-wrapped-2026-09-07/ROOT_POST.json) | 3365 | `36fead3ba365d010942833aa35bd220151260cf9daa3cae34518cd4ed772f4cf` |
+| [Full stdout JSONL](../../build-ready-runtime/cost-observer-wrapped-2026-09-07/wrapped-controls.stdout.jsonl) | 688260 | `63fe3370cd4053e83f1ca5e40851e9f2305f72deddc884aa4741b8675f271130` |
+| [Outer stderr](../../build-ready-runtime/cost-observer-wrapped-2026-09-07/wrapped-controls.stderr) | 0 | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| [Busy GNU time](../../build-ready-runtime/cost-observer-wrapped-2026-09-07/gnu-time/busy.time.txt) | 790 | `e3bdd3417f7676117f2678a55f1158f64ebebdbd4cc6a2cd3fcde0a70925d76a` |
+| [Idle GNU time](../../build-ready-runtime/cost-observer-wrapped-2026-09-07/gnu-time/idle.time.txt) | 789 | `61b64760a67ae6057db9ab877628f03325882a0ed597c2b2372e76a6a9b4a107` |
+
+### Replay boundary and remaining scope
+
+For a future separately authorized reproduction, use a **new, absent bank**;
+never rerun into the evidence above. The driver requires its GNU-time directory
+to exist and be empty. Example only, not an additional execution request:
+
+```bash
+cd /K3D/GitHub/cgm-zig
+set -o noclobber
+wrapped_replay=/K3D/GitHub/cgm-zig/build-ready-runtime/cost-observer-wrapped-replay-01
+test ! -e "$wrapped_replay" && test ! -L "$wrapped_replay" || exit 2
+mkdir "$wrapped_replay" || exit 2
+mkdir "$wrapped_replay/gnu-time" || exit 2
+LC_ALL=C /usr/bin/python3 -B -m partner_tools.cost_observation.wrapped_controls \
+  --execute --log-root "$wrapped_replay/gnu-time" \
+  > "$wrapped_replay/wrapped-controls.stdout.jsonl" \
+  2> "$wrapped_replay/wrapped-controls.stderr"
+wrapped_replay_rc=$?
+# Retain the exit code and all outputs. No automatic retry after HOLD/failure.
+```
+
+Root owns any such authorization, fresh preseal/environment review and subsequent
+readback; new observations must not replace this pair. Permission/identity gaps,
+unselected processes and descendants, between-sample work, all-thread residency,
+blocking reads, and shared-cache/bandwidth/thermal effects retain their earlier
+limits. Neither zero snapshot errors nor the matched work chains prove a whole
+host clean, a compiler unaffected or two compiler artifacts equivalent. No
+timeout/cancellation signal path was fired by this successful live pair; those
+paths retain their mocked verification ceiling. No overhead subtraction,
+sixteen-run acceptance, release, publication or promotion verdict follows.
+
+This receipt was appended by GPT 6 Astra after read-only raw-data reconciliation.
+The previous **30,348 bytes / 491 lines**, SHA-256
+`3a437233adb4ec87f5faa971d3fe4a747d159ddc1172bdc0c69f102b9fc96813`,
+remain an exact unchanged prefix. Only this README was edited, with `apply_patch`;
+no test, workload, compiler, host observation, source, archive or default action
+was performed by this documentation lease.
