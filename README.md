@@ -13,6 +13,22 @@ toolchain fork. Upstream: [Zig](https://ziglang.org) 0.16.0, imported verbatim f
 Upstream's own README is preserved at `README.upstream.md`; upstream's MIT license
 (`LICENSE`) governs and is preserved unmodified.
 
+## Current station compiler — 2026-09-07
+
+At **15:48:17.019 UTC**, root operationally promoted the verified compiler
+`0.16.0+cgm.0399d2b19b` (SHA-256 `d6b4168f…`) to the station default:
+`PROMOTED/zig` now selects durable `PROMOTED/stage3-d6b4168f/bin/zig`.
+The old `stage3-046d6833` remains preserved. The
+[promotion receipt](docs/crown/OPERATIONAL_PROMOTION_2026-09-07.md) records
+the exact binary/library identities, successful version/library discovery and
+Daniel's verification-backed operational disposition. Existing functional and
+control evidence is the primary basis; the two real-project attempts both
+failed at matching project guards, not newly successful product builds.
+Historical clean-machine cost acceptance remains **UNFULFILLED**, with no
+retroactive performance pass. Public prerelease/latest-release metadata and
+archive bytes are unchanged. Earlier candidate/default statements below retain
+their historical state; this note identifies the current station default.
+
 ## Why this fork exists
 
 Building a large hyper-modular project (≈1,800 named modules / ≈2,300 files analyzed
@@ -47,6 +63,12 @@ Historical snapshot at `63effbe9` (before the 2026-09-06 candidate): 57 commits 
 message, a verification row, `PROMOTED/RECORD.md`, or `docs/crown/BUILDING.md`;
 where the fork's record holds no measurement of a change's effect, the row says
 **not yet measured** rather than claiming one.
+
+### Historical default inventory — before the 2026-09-07 operational promotion
+
+The following old046d description and table labels preserve the earlier
+promoted inventory, not today's default pointer. Their measured facts remain
+unchanged; use the current station note above for the later promotion.
 
 **Which of this is in the compiler the station actually runs.** The promoted
 binary `PROMOTED/stage3-046d6833/bin/zig` (ReleaseSafe, sha256 `046d6833…`) was

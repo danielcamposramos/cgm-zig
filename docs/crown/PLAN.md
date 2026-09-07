@@ -243,3 +243,18 @@ station default remains `stage3-046d6833`. Clean-machine cost acceptance and
 default promotion are still UNFULFILLED; both observed series stay stopped.
 No frozen archive was updated with later evidence or these notes. This closes
 bounded prerelease publication, not a Crown stage, performance or foundation gate.
+
+## Operational promotion successor — 2026-09-07
+
+The [operational promotion receipt](OPERATIONAL_PROMOTION_2026-09-07.md)
+supersedes earlier default-pending statements: at 15:48:17.019 UTC, root
+repointed the station to durable `stage3-d6b4168f`, preserving old046d.
+Daniel's direction and the existing functional/control/package evidence are
+the primary verification basis. Both real-project attempts failed at matching
+project graph guards; 131/131 selected diagnostic rows agree after thread-PID
+normalization, not product-build or runtime success. The bounded source mtime
+census is not an estate-wide before/after byte seal. Historical clean-machine
+cost acceptance remains UNFULFILLED, without a retroactive pass or speed claim.
+This is a recorded operational judgment, not completion of the Crown roadmap.
+The stopped cost series, public release designations and frozen archives remain
+unchanged; no new workload or broader verification is implied by this note.
