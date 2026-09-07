@@ -35,6 +35,13 @@ stale selection and does not independently test each index-state predicate.
 Default-entry and integration-OOM controls remain open; no crown-stage completion,
 default change, speedup or promotion is implied.
 
+Further default-mode update 2026-09-07: the [default-entry control](READY_INDEX_DEFAULT_ENTRY_CONTROL_2026-09-07.md)
+discriminates layered helper entry from explicit insertion and omitted order:
+the two default-mode runs pass three outcomes each, and a separately rebuilt
+restoration passes layered order with 2,083 same-state agreements. Prepare's
+panic masks independent append-tripwire activation. Integration OOM remains
+open; this closes no crown stage and implies no speedup or promotion.
+
 ## The problem, measured
 
 Zig performs whole-closure semantic analysis per compilation unit: one `build-exe`

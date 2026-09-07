@@ -110,6 +110,13 @@ The short-circuited predicate does not separately negative-control each index
 state. Default-entry and integration-OOM controls remain open; no speed or
 promotion claim follows.
 
+Further default-mode update 2026-09-07: the [default-entry control](docs/crown/READY_INDEX_DEFAULT_ENTRY_CONTROL_2026-09-07.md)
+now has a named layered prepare-entry failure while explicit insertion and
+omitted order each pass all three outcomes with four zero-capacity/memo exits
+(including compiler_rt). Exact restoration and a separate rebuild pass layered
+order with 2,083 same-state agreements. The earlier prepare panic masks the
+append tripwire; integration OOM remains open, with no speed or promotion claim.
+
 The same commit corrects status-tool promotion authority, diagnostic/sabotage
 instructions and the documented ReleaseSafe build switches. The fresh candidate
 build uses safety checks, debug extensions, logging and a baseline CPU target;
