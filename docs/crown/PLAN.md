@@ -28,6 +28,13 @@ restoration plus a separate compiler rebuild: all four fixture updates and
 integration-OOM controls remain open. This closes one bounded control, not a
 crown stage, a new default, promotion or end-to-end speedup evidence.
 
+Further update 2026-09-07: the [lost-update-invalidation control](READY_INDEX_LOST_INVALIDATION_CONTROL_2026-09-07.md)
+has its intended populated-memo failure, exact source restoration and separately
+rebuilt four-outcome pass with 2,095 same-state agreements. The failure precedes
+stale selection and does not independently test each index-state predicate.
+Default-entry and integration-OOM controls remain open; no crown-stage completion,
+default change, speedup or promotion is implied.
+
 ## The problem, measured
 
 Zig performs whole-closure semantic analysis per compilation unit: one `build-exe`

@@ -102,6 +102,14 @@ See [the lost-append control](docs/crown/READY_INDEX_LOST_APPEND_CONTROL_2026-09
 Lost-update-invalidation, default-entry and integration-OOM controls remain open;
 this is not promotion or performance evidence.
 
+Further update 2026-09-07: the [lost-update-invalidation control](docs/crown/READY_INDEX_LOST_INVALIDATION_CONTROL_2026-09-07.md)
+now fails at a retained memo count of 98 before second-update processing, then
+passes all four outcomes after exact restoration and a separate rebuild, with
+2,095 same-state agreements and populated memo reset checks at 98 and 3.
+The short-circuited predicate does not separately negative-control each index
+state. Default-entry and integration-OOM controls remain open; no speed or
+promotion claim follows.
+
 The same commit corrects status-tool promotion authority, diagnostic/sabotage
 instructions and the documented ReleaseSafe build switches. The fresh candidate
 build uses safety checks, debug extensions, logging and a baseline CPU target;
