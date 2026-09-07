@@ -4,6 +4,23 @@
 Campos Ramos. This is the staged design for the fork's flagship feature: attacking
 "every module has its debug copy" at its source.*
 
+## Current-state note — 2026-09-06
+
+The stage table below preserves the original design sequence, not today's
+implementation status. Module-graph emission, import-aware AstGen and batch
+AstGen subsequently landed; their individual capabilities and evidence are
+listed in the current README. That does not establish every field or every
+rung promised by this plan.
+
+The new optional ready-set index at `d3347292c9` addresses repeated layered
+selection scans. It is not the module-artifact cache, the analysis-reuse
+ledger, DWARF deduplication, residency-bounded tiling, or parallel Sema. Those
+remain distinct work with the comptime/context constraints below intact.
+The index now has bounded rebuilt-candidate integration evidence, including
+10,678 same-live-state index/scan agreements and actual update/wrapper reach.
+Broken-hook controls and production OOM remain open; see the live-shadow
+receipt. This is not end-to-end speedup evidence or a new default.
+
 ## The problem, measured
 
 Zig performs whole-closure semantic analysis per compilation unit: one `build-exe`

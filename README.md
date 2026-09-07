@@ -39,7 +39,7 @@ toward zero and the fork retires.
 
 ## What differs from upstream Zig 0.16.0
 
-Measured from the fork's own history: 57 commits since the verbatim tarball import
+Historical snapshot at `63effbe9` (before the 2026-09-06 candidate): 57 commits since the verbatim tarball import
 (`754b7a38`), touching 63 files, +12,744 / −109 lines. By directory: compiler
 `src/` 13 files (+3,007 / −97), `lib/std/` 6 files (+575 / −2), `lib/compiler/`
 1 file (+347 / −5), documentation 13 files (+4,071), `partner_tools/` 22 files
@@ -51,10 +51,12 @@ where the fork's record holds no measurement of a change's effect, the row says
 **Which of this is in the compiler the station actually runs.** The promoted
 binary `PROMOTED/stage3-046d6833/bin/zig` (ReleaseSafe, sha256 `046d6833…`) was
 built from the tree at `b991cb16` on branch `patch/005-auto-hardware-threading`;
-no `src/` or `lib/` file changed between that commit and the branch tip. So every
-compiler-level row is **PROMOTED**; nothing in code is queued behind the binary.
-What remains queued is *evidence*: the rows marked "not yet measured", and the
-V12 part-2 residual named under group (c). The practical result the maintainer
+no `src/` or `lib/` file changed between that commit and the historical
+`63effbe9` tip. The historical compiler rows below therefore describe that
+promoted binary. **This does not include the new `d3347292c9` ready-index or
+`0399d2b19b` logging correction:** their rebuilt candidates have bounded runtime
+evidence but are not promoted code. The older unmeasured rows and V12 part-2
+residual under group (c) also remain open. The practical result the maintainer
 reports (2026-08-30, under that binary): a full build of the ≈1,800-module
 workload that on stock 0.16.0 never completed — it died silently after more than
 two hours, every time — now completes in under 45 minutes. That figure is a
@@ -64,6 +66,45 @@ against any other configuration.
 Row status: **PROMOTED** = in `stage3-046d6833`; **PROMOTED, ships OFF** = in the
 binary but only behind an opt-in flag; **TOOLING** = Python/skills, not in the
 binary; **DOCS**.
+
+### Current source candidate — 2026-09-06
+
+Commit `d3347292c9` adds an optional indexed heap for layered ready selection:
+O(1) peeks and O(log n) repairs, current-map tie ordering, rank-epoch invalidation,
+and original scan fallback on optional-allocation failure or transient ownership.
+Insertion stays default; this does not parallelize Sema. Root independently
+reran seven helper tests (4096 mixed transitions). The logging-fixed successor
+at `0399d2b19b` has been rebuilt and exercised through 47 runner-accepted
+incremental updates. An isolated observation build compared 10,678 indexed
+choices with the original scan on the same live ready sets: all matched.
+Real insertion/removal, epoch, abort/recovery, tier and cycle paths were reached.
+Deliberately broken-hook controls, integration OOM and end-to-end performance
+remain open; the shadow's extra scans are measurement overhead, not shipping
+code. The reused runner's diagnostic-completeness limitations are explicit in
+[the live-shadow receipt](docs/crown/READY_INDEX_LIVE_SHADOW_2026-09-06.md).
+
+The incremental runner's completeness checks were then repaired: it now refuses
+missing expected diagnostic tails and unchecked terminal outcomes. Three real
+controls that the old runner incorrectly accepted each produce the intended
+named failure in the repaired runner. A fresh repaired build then passed all
+47 native update expectations plus three separate sema updates; the exact
+coverage and remaining branches are in
+[the runner receipt](docs/crown/INCREMENTAL_RUNNER_COMPLETENESS_2026-09-07.md#2026-09-07--actual-root-execution-addendum).
+The live-shadow selection checker also has its own deliberate failure and
+checksum-restored rebuild/run, documented in
+[the self-control receipt](docs/crown/READY_INDEX_SELECTION_SELF_CONTROL_2026-09-07.md).
+Neither result substitutes for the still-open lost-hook and integration-OOM controls.
+
+The same commit corrects status-tool promotion authority, diagnostic/sabotage
+instructions and the documented ReleaseSafe build switches. The fresh candidate
+build uses safety checks, debug extensions, logging and a baseline CPU target;
+that target does **not** remove its system LLVM/runtime dependencies or prove
+portability. The logging correction preserves mode defaults and filters debug
+output by requested scope; matching/nonmatching/no-scope controls are documented
+in [the candidate verification](docs/crown/LOG_FIXED_CANDIDATE_VERIFICATION_2026-09-06.md).
+Neither a new package nor promotion is claimed here. See
+[the source review](docs/crown/READY_INDEX_ROOT_REVIEW_2026-09-06.md) and
+[the recipe controls](docs/crown/BUILD_RECIPE_CORRECTION_2026-09-06.md).
 
 ### (a) The frontend crash becomes a named refusal
 
@@ -87,9 +128,9 @@ binary; **DOCS**.
 | Change | Where | Commits | Status | Observed effect |
 |---|---|---|---|---|
 | `std.Thread.Topology`: physical cores and SMT siblings, every sibling set intersected with `sched_getaffinity` before it is counted. `physical` is `?usize` and `null` means unknown — never 1, never `logical / 2`; a partial probe is discarded whole. Linux via sysfs then `/proc/cpuinfo`; Darwin via `hw.physicalcpu` (read-verified only); everything else `.unknown`. | `lib/std/Thread/Topology.zig` (new), `lib/std/Thread.zig` | `7106d368` (patch/005a) | PROMOTED | V-S1a GREEN 7 of 7 masks match the sysfs oracle, including the `null` a mixed mask must produce; the same probe refuses to build against the reference compiler (control: it is fork-added). V14, the affinity-intersection sabotage control: **not yet measured** (patch prepared and `git apply --check` clean; the rebuild was not fired). cgroup CPU quota is named as invisible to this probe, not approximated. |
-| ThreadPlan: the worker count is split from the InternPool partition count. `M_wide = -j<N> orelse logical`; `K = --intern-partitions orelse 1 << ceil_log2(max(physical, 2))`. AstGen runs on the wide lane: `workerUpdateFile` holds a thread id only for its import-discovery tail, and `updateFile` / `lockAndClearFileCompileError` / `reportRetryableFileError` now take `*Zcu`, so the rule is enforced by signature. `--intern-partitions` reaches every sub-compilation's pool by default rather than through twelve forwarding sites. | `src/ThreadPlan.zig` (new), `src/main.zig`, `src/Compilation.zig`, `src/InternPool.zig`, `src/Sema.zig`, `src/Zcu.zig`, `src/Zcu/PerThread.zig` | `016d8987` (patch/005b) | PROMOTED | V2-EXP GREEN: `-j1` → workers 1, partitions 8, 268,435,455 items per partition — `-j` moves workers and leaves K alone. V5 GREEN: 1,200 files at `-j64`, rc=0, digest identical to `-j1`. On the 6c/12t reference host the derived K=8 gives 4.00× the incident's ceiling — derived from the constants; the reproduction on the ≈1,800-module workload (V7a/V7b) is **not yet measured** in the harness (blocked by charter). V13/V13-MM, the SMT payoff on the wide lane: INCONCLUSIVE — wall clock inside the noise floor; `real_ns_files` favours the wider lane by 23.6%, a note, not a claim. **Named residual (R12):** race freedom of the lane split is read- and type-verified only; ThreadSanitizer is unbuildable here (`linux/scc.h`), the Helgrind substitute was retracted for cross-build comparison, and the standing evidence is determinism — V12-P1A 1 distinct digest of 5 on the fan-out, identical to its own `-j1`; V12-P1B `.text` 1 of 5; an independent direct check 1 of 20 on both arms. |
-| Edges-first ordering. Build runner: `--step-order=layered\|random\|declared` (default `layered`: depth ASC, fan-in DESC, name ASC over the ready set; `random` kept as the missing-edge fuzzer). Inside one compilation: `--analysis-order=insertion\|layered` — a priority over the ready set, never a change to the set, because eager leaf analysis would be language divergence. | `lib/compiler/build_runner.zig`, `src/Compilation/ModuleRanking.zig` (new), `src/Compilation.zig`, `src/Zcu.zig`, `src/Zcu/PerThread.zig`, `src/main.zig` | `2a9ca530` (patch/005c) | PROMOTED (step order); PROMOTED, ships OFF (`--analysis-order=layered`) | V10 GREEN: `layered` 3.567 s vs `random` 3.631 s vs `declared` 3.760 s over 13 steps — a weak green, inside the noise floor against `random`. V8 RED for the feature: `layered` analysis is +6.59% slower than `insertion` (3 of 3 paired slots), so it stays off until a bucket index exists; the default was never `layered`. V9 GREEN: a cyclic module graph does not hang the ranker. |
-| Rider 1: `Io.Threaded.concurrent_reserve` — `io.async` admission leaves a reserve so `io.concurrent` (the linker's slot) is not starved by bulk work. Default `0` makes both predicates byte-for-byte the stock arithmetic; the compiler sets 1 only when at least two async slots exist. | `lib/std/Io/Threaded.zig`, `src/main.zig` | `0711a34e` | PROMOTED | V4 GREEN (link ran beside analysis — above). V15 GREEN: 0 of 881 thread-samples parked in `Id.acquire`, with 4,472 Zig frames resolved as the instrument control, so the dossier's proposed admission gate was retired by measurement. V-S2a/V-S2b sabotage controls: **not yet measured** (the prepared patches no longer apply to the current tree; rebuild not fired). |
+| ThreadPlan: the worker count is split from the InternPool partition count. `M_wide = -j<N> orelse logical`; `K = --intern-partitions orelse 1 << ceil_log2(max(physical orelse logical, 4)), capped by the representable partition count`. AstGen runs on the wide lane: `workerUpdateFile` holds a thread id only for its import-discovery tail, and `updateFile` / `lockAndClearFileCompileError` / `reportRetryableFileError` now take `*Zcu`, so the rule is enforced by signature. `--intern-partitions` reaches every sub-compilation's pool by default rather than through twelve forwarding sites. | `src/ThreadPlan.zig` (new), `src/main.zig`, `src/Compilation.zig`, `src/InternPool.zig`, `src/Sema.zig`, `src/Zcu.zig`, `src/Zcu/PerThread.zig` | `016d8987` (patch/005b) | PROMOTED | V2-EXP GREEN: `-j1` → workers 1, partitions 8, 268,435,455 items per partition — `-j` moves workers and leaves K alone. V5 GREEN: 1,200 files at `-j64`, rc=0, digest identical to `-j1`. On the 6c/12t reference host the derived K=8 gives 4.00× the incident's ceiling — derived from the constants; the reproduction on the ≈1,800-module workload (V7a/V7b) is **not yet measured** in the harness (blocked by charter). V13/V13-MM, the SMT payoff on the wide lane: INCONCLUSIVE — wall clock inside the noise floor; `real_ns_files` favours the wider lane by 23.6%, a note, not a claim. **Named residual (R12):** race freedom of the lane split is read- and type-verified only; ThreadSanitizer is unbuildable here (`linux/scc.h`), the Helgrind substitute was retracted for cross-build comparison, and the standing evidence is determinism — V12-P1A 1 distinct digest of 5 on the fan-out, identical to its own `-j1`; V12-P1B `.text` 1 of 5; an independent direct check 1 of 20 on both arms. |
+| Edges-first ordering. Build runner: `--step-order=layered\|random\|declared` (default `layered`: depth ASC, fan-in DESC, name ASC over the ready set; `random` kept as the missing-edge fuzzer). Inside one compilation: `--analysis-order=insertion\|layered` — a priority over the ready set, never a change to the set, because eager leaf analysis would be language divergence. | `lib/compiler/build_runner.zig`, `src/Compilation/ModuleRanking.zig` (new), `src/Compilation.zig`, `src/Zcu.zig`, `src/Zcu/PerThread.zig`, `src/main.zig` | `2a9ca530` (patch/005c) | PROMOTED (step order); PROMOTED, ships OFF (`--analysis-order=layered`) | V10 GREEN: `layered` 3.567 s vs `random` 3.631 s vs `declared` 3.760 s over 13 steps — a weak green, inside the noise floor against `random`. V8 RED for the feature: `layered` analysis is +6.59% slower than `insertion` (3 of 3 paired slots), so it stayed off; the new optional index is now authored but has no end-to-end timing result yet. The default remains `insertion`. V9 GREEN: a cyclic module graph does not hang the ranker. |
+| Rider 1: `Io.Threaded.concurrent_reserve` — `io.async` admission leaves a reserve so `io.concurrent` (the linker's slot) is not starved by bulk work. Default `0` makes both predicates byte-for-byte the stock arithmetic; the compiler sets 1 only when at least two async slots exist. | `lib/std/Io/Threaded.zig`, `src/main.zig` | `0711a34e` | PROMOTED | V4 GREEN (link ran beside analysis — above). V15 GREEN: 0 of 881 thread-samples parked in `Id.acquire`, with 4,472 Zig frames resolved as the instrument control, so the dossier's proposed admission gate was retired by measurement. V-S2a/V-S2b sabotage controls: **not yet measured** (the stale contexts were repaired and apply-check verified in the 2026-09-06 correction; sabotage rebuilds remain unrun). |
 | Rider 2: `-j` reaches child compilers. `std.Build.Graph.child_jobs: ?u32` (null = stock), `Step.Compile` appends `-j<N>` when set; `zig build --child-jobs=keep\|share\|N`. The default shipped as `share` and reverted to `keep` when its own gate fired; `share` stays a selectable member. | `lib/compiler/build_runner.zig`, `lib/std/Build.zig`, `lib/std/Build/Step/Compile.zig` | `9a7cbab8`, `50a7b87f` | PROMOTED (default `keep`); `share` ships OFF | V-S4a GREEN: peak worker threads across a `-j4` build on an 8-CPU mask, `keep` 35 → `share` 10. V-S4b RED for `share`: +6.55% slower, 3 of 3 paired slots; peak process-tree RSS `share` 1,065,244 KB vs `keep` 1,104,468 KB. Caveat named in the code: a 13-step fixture of short compiles is the regime where the cure costs most; a large project could invert it. |
 | ThreadPlan: a starved thread-id pool is impossible to derive (`min_derived_basis = 4`) and refused by name when an explicit `--intern-partitions` would leave 0 allocating lanes. This was the fork's own regression — the (K, M_wide) split made the state reachable — found by the harness and fixed inside the same run. | `src/ThreadPlan.zig`, `src/Zcu.zig`, `src/main.zig` | `3669ffc7` | PROMOTED | V16 GREEN, 0 hangs of 6 configurations: `build-obj hello.zig` with no flags on a 2-physical/4-logical mask went from rc=124 (hung, first build) to rc=0; `-j4 --intern-partitions=2` → refused, rc=1, with the remedy; `-j1 --intern-partitions=2` still rc=0 (the over-fire guard). |
 
@@ -104,7 +145,7 @@ binary; **DOCS**.
 
 | Change | Where | Commits | Status | Observed effect |
 |---|---|---|---|---|
-| `Compilation.resolveEmitPath` becomes `pub`. Upstream never marked it; `EmitModuleGraph.zig` calls it cross-file. It lives on this branch as `e0bcdab2` and as a cherry-pick `63778997` on the station-local `main`; retires the day upstream marks it `pub`. | `src/Compilation.zig` | `e0bcdab2` | PROMOTED | `main` had not compiled since 2026-08-22 (`'resolveEmitPath' is not marked 'pub'`) and nobody met it because the promoted binary predated the break by sixteen minutes. After: type-check 0 errors, stage3 `ninja` exit 0. |
+| `Compilation.resolveEmitPath` becomes `pub`. Upstream never marked it; `EmitModuleGraph.zig` calls it cross-file. It lives in the shared history as `e0bcdab2`. The old local-main cherry-pick `63778997` is preserved at `backup/main-before-sync-2026-09-06`; local main was reconciled to online `63effbe9` before the new candidate. It retires the day upstream marks it `pub`. | `src/Compilation.zig` | `e0bcdab2` | PROMOTED | `main` had not compiled since 2026-08-22 (`'resolveEmitPath' is not marked 'pub'`) and nobody met it because the promoted binary predated the break by sixteen minutes. After: type-check 0 errors, stage3 `ninja` exit 0. |
 
 ### (f) Documentation and partner tooling (not in the binary)
 
@@ -144,8 +185,11 @@ fork the lawful remaining channel, is described in [`PROVENANCE.md`](PROVENANCE.
 ## Provenance
 
 Diagnosis and patches are the joint work of Daniel Campos Ramos and AI partners
-(Anthropic Claude models via Claude Code), recorded honestly per the project's
-multi-model credit practice. Each patch commit carries its full evidence trail.
+including Anthropic Claude models via Claude Code and OpenAI Codex partners,
+with GPT 6 Astra credited for the continuing orchestration and integration.
+The original diagnosis and authorship remain credited to their contributors;
+see [the full credit chain](PROVENANCE.md). Each patch commit carries its
+evidence trail and its verification limits.
 
 ## For AI partners
 

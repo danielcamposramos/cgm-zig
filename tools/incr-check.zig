@@ -290,6 +290,7 @@ const Eval = struct {
         const stdout = mr.fileReader(0);
         const stderr = &mr.fileReader(1).interface;
         const Header = std.zig.Server.Message.Header;
+        var success_result_handled = false;
 
         while (true) {
             const header = stdout.interface.takeStruct(Header, .little) catch |err| switch (err) {
@@ -316,6 +317,19 @@ const Eval = struct {
                     }
                     if (result_error_bundle.errorMessageCount() != 0) {
                         try eval.checkErrorOutcome(update, result_error_bundle);
+                    } else switch (update.outcome) {
+                        .unknown => {},
+                        .compile_errors => eval.fatal("expected compile errors but received empty terminal error_bundle", .{}),
+                        .stdout, .exit_code => {
+                            if (eval.target.backend == .sema) {
+                                if (!success_result_handled) {
+                                    try eval.checkSuccessOutcome(update, null, prog_node);
+                                    success_result_handled = true;
+                                }
+                            } else if (!success_result_handled) {
+                                eval.fatal("empty terminal error_bundle without handled success result", .{});
+                            }
+                        },
                     }
                     // This message indicates the end of the update.
                     return;
@@ -334,6 +348,7 @@ const Eval = struct {
                     }
                     if (eval.target.backend == .sema) {
                         try eval.checkSuccessOutcome(update, null, prog_node);
+                        success_result_handled = true;
                         continue;
                     }
 
@@ -348,6 +363,7 @@ const Eval = struct {
                     const bin_path = try Dir.path.join(arena, &.{ result_dir, bin_name });
 
                     try eval.checkSuccessOutcome(update, bin_path, prog_node);
+                    success_result_handled = true;
                 },
                 else => {
                     // Ignore other messages.
@@ -397,6 +413,11 @@ const Eval = struct {
                 try eval.checkOneError(error_bundle, expected.errors[expected_idx], true, note_idx);
                 expected_idx += 1;
             }
+        }
+
+        if (expected_idx != expected.errors.len) {
+            try error_bundle.renderToStderr(io, .{}, .auto);
+            eval.fatal("insufficient diagnostic count: received {d}, expected {d}", .{ expected_idx, expected.errors.len });
         }
 
         if (!std.mem.eql(u8, error_bundle.getCompileLogOutput(), expected.compile_log_output)) {
