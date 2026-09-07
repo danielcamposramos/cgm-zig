@@ -42,6 +42,19 @@ restoration passes layered order with 2,083 same-state agreements. Prepare's
 panic masks independent append-tripwire activation. Integration OOM remains
 open; this closes no crown stage and implies no speedup or promotion.
 
+Superseding status 2026-09-07: the earlier open-status notes are preserved as
+history. The [first nodes-preparation-allocation control](READY_INDEX_PREPARE_OOM_RECEIPT_2026-09-07.md)
+is complete: 4/4 compiler builds and 5/5 intended runtime phase outcomes (four
+successful runs and one expected named tripwire failure), including exact clean
+restoration and recovery. The shipping candidate remains uninstrumented.
+Broader OOM coverage, post-abort rearming and performance remain unproved;
+this closes no crown stage and does not establish foundation or release readiness.
+
+The [release-cost packet](READY_INDEX_RELEASE_COST_PACKET_2026-09-07.md) is
+materialized locally, with 0/12 timed compiles run. Three CPU-activity holds
+prevented launch, not failed timing samples. Package, companion evidence bundle,
+online main synchronization, release and promotion remain open.
+
 ## The problem, measured
 
 Zig performs whole-closure semantic analysis per compilation unit: one `build-exe`

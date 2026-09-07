@@ -117,6 +117,19 @@ omitted order each pass all three outcomes with four zero-capacity/memo exits
 order with 2,083 same-state agreements. The earlier prepare panic masks the
 append tripwire; integration OOM remains open, with no speed or promotion claim.
 
+Superseding status 2026-09-07: the earlier open-status paragraphs remain as
+history. The [first nodes-preparation-allocation control](docs/crown/READY_INDEX_PREPARE_OOM_RECEIPT_2026-09-07.md)
+is now complete: 4/4 compiler builds and 5/5 intended runtime phase outcomes
+(four successful runs and one expected named tripwire failure), followed through
+exact clean restoration and recovery. The shipping candidate remains
+uninstrumented. Broader OOM coverage, post-abort rearming and performance remain
+unproved; this finite control does not establish foundation or release readiness.
+
+The [release-cost packet](docs/crown/READY_INDEX_RELEASE_COST_PACKET_2026-09-07.md)
+is materialized locally, but 0/12 timed compiles have run. Three CPU-activity holds
+prevented launch; neither is a failed timing sample. Package, companion evidence
+bundle, online main synchronization, release and promotion remain open.
+
 The same commit corrects status-tool promotion authority, diagnostic/sabotage
 instructions and the documented ReleaseSafe build switches. The fresh candidate
 build uses safety checks, debug extensions, logging and a baseline CPU target;
