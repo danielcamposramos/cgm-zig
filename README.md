@@ -153,6 +153,18 @@ Neither a new package nor promotion is claimed here. See
 [the source review](docs/crown/READY_INDEX_ROOT_REVIEW_2026-09-06.md) and
 [the recipe controls](docs/crown/BUILD_RECIPE_CORRECTION_2026-09-06.md).
 
+Superseding local packaging status 2026-09-07: the unchanged candidate package
+is locally archived, extracted and smoke-verified, and its separate evidence
+companion is now assembled with 20,218/20,218 members byte-verified. Root's
+separate readback agrees at the shared-parser limits in the
+[package and companion receipt](docs/crown/CANDIDATE_PACKAGE_VERIFICATION_2026-09-07.md).
+The companion contains the earlier package-verification receipt, not this
+later documentation successor; neither frozen archive was repacked. Later
+observer implementation/integration remains outside those snapshots.
+Publication, online main synchronization, release and default promotion remain
+open; the clean-machine cost criterion is still UNFULFILLED. These local
+packaging results do not establish performance equivalence or crown completion.
+
 ### (a) The frontend crash becomes a named refusal
 
 | Change | Where | Commits | Status | Observed effect |

@@ -66,6 +66,16 @@ and smoke verification may proceed separately; package/evidence,
 publication/main-sync, release and system-default gates remain open and
 unexecuted in this packet. No crown stage or foundation completion is implied.
 
+Superseding local packaging status 2026-09-07: the candidate package is locally
+archive/extraction/smoke-verified, and the separate companion has
+20,218/20,218 members reconciled by assembly readback and Root's later traversal.
+See the [package and companion receipt](CANDIDATE_PACKAGE_VERIFICATION_2026-09-07.md)
+for checksums, exact snapshot boundaries and shared-parser review limits.
+Neither frozen archive includes these later readiness notes or the later
+observer implementation/integration. Publication, online main synchronization,
+release and system-default promotion remain open; clean-machine cost acceptance
+is still UNFULFILLED. This closes no crown stage and proves no speedup.
+
 ## The problem, measured
 
 Zig performs whole-closure semantic analysis per compilation unit: one `build-exe`
