@@ -215,3 +215,18 @@ Diagnosis of the motivating failure, this plan, and the staged implementation ar
 joint human+AI work (Daniel Campos Ramos with Anthropic Claude models — Fable
 planning/orchestration; Opus, Sonnet, Haiku in the implementation workflows),
 credited per commit. See `PROVENANCE.md`.
+
+## Observed-cost successor status — 2026-09-07
+
+The [observed-cost receipt](READY_INDEX_OBSERVED_COST_RECEIPT_2026-09-07.md)
+records two separately stopped attempts, each 1/16 launched with 15 unlaunched:
+first a root empty-libc launch-binding error; then a corrected successful
+old/default compile rejected by one CPU10 user tick under the preaccepted
+zero-sibling-execution rule. Neither produced a quality-supported timing.
+The original 12/12 successful, environment-qualified samples remain unchanged
+and unpooled. The real wrapped busy/idle controls passed 2/2 for instrument
+correctness only. The full observed matrix and clean-machine cost gate remain
+UNFULFILLED; no further workload is authorized by these receipts. Both existing
+archives remain frozen without this later implementation/evidence. This status
+claims no comparison, speedup, online-main push, release, default promotion or
+crown-stage completion.
