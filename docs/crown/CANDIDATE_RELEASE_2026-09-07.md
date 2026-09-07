@@ -178,3 +178,59 @@ package/evidence records. The destination was absent. No compiler, test,
 workload, archive operation, Git/network action, upload, tag creation, cleanup
 or pointer change was performed. Prerelease execution and verification are
 still root-owned future actions; this document is not their completion receipt.
+
+## 2026-09-07 — executed prerelease publication
+
+This successor preserves the complete 10,812-byte preparation above, SHA-256
+`934f6965740a93f7066408f2efaf5210b4bad3288dcc8b9c25edb0dc5334dd7a`.
+Its earlier proposed/unexecuted publication statements are now historical:
+the coordinating partner actually published the
+[unpromoted candidate prerelease](https://github.com/danielcamposramos/cgm-zig/releases/tag/0.16.0%2Bcgm.0399d2b19b)
+at **2026-09-07 14:18:54 UTC**, release ID **384140388**.
+Execution was by the root coordinating partner under Daniel's direction;
+this documentation follow-up reads the retained evidence, not the network.
+
+The complete [LOCAL RELEASE_POST](../../build-publication-2026-09-07/RELEASE_POST.json),
+recorded at `2026-09-07T14:20:23.313Z`, has SHA-256
+`3d21d10091b31deb0abb38e605899f58ca712174710a09c289aac365e77ced17`.
+Root's API verification records:
+
+- `draft=false`, `prerelease=true`; stable `0.16.0+cgm.046d6833` remains latest.
+- **3/3 expected assets** have state `uploaded`, with exact matching names,
+  byte sizes and API-reported SHA-256 digests. The two archives retain the
+  names, sizes and checksums in the asset table above. The third asset is
+  `SHA256SUMS`, **231 bytes**, SHA-256
+  `2b003b7a5459769006ce7d96b532c7de197ad1aa7b797a16187fa7cd841db838`.
+  Its two rows identify exactly those two archives.
+- The remote body exactly matches the separately submitted
+  [LOCAL RELEASE_NOTES.md](../../build-publication-2026-09-07/RELEASE_NOTES.md),
+  **3,645 bytes**, SHA-256
+  `15c6c5913fb1804a925d37aa4a6391b781a8f7f0f1c0ecfd418eada58aabe706`.
+  That submitted body is not this longer, evolving repository document.
+- Retained live remote refs identify tag `0.16.0+cgm.0399d2b19b` at
+  `767784fec9872c354da9e2b13a54312cb149eda1` and main at
+  `cf28537cb443f345faba643e85d94acf6ac06fb5` at the recorded observation.
+  The compiler remains source0399 and the packaged documents remain
+  docs159122; neither is relabeled as built from the tag or later main.
+- The default pointer still resolves to
+  `PROMOTED/stage3-046d6833/bin/zig`; no binary promotion occurred.
+
+The author independently read all three local publication files, checked the
+submitted notes and checksum-file identities against POST, and reconciled its
+3/3 asset rows. **Remote asset verification is root's API-reported size/digest
+evidence, not downloaded-byte readback.** No asset download, new archive audit,
+compiler/test/cost run, or independent API query was performed here.
+
+Publication does not alter the two frozen archives or their two declared
+derivatives. The later observer implementation, stopped-series raw records,
+these publication records and this successor were not silently inserted into
+either archive. Original raw evidence remains retained with its existing
+LOCAL/replay boundaries. The published source and bounded prerelease are now
+available; **clean-machine cost acceptance and system-default promotion remain
+UNFULFILLED**. Neither stopped series is resumed, and no speedup, equivalence,
+general portability or Crown/foundation completion follows.
+
+This additive follow-up changes only this document and ending status notes in
+README and crown PLAN, through `apply_patch`. Existing text prefixes and all
+publication inputs remain unchanged. It performs no publication, Git/network,
+workload, archive, source, cleanup or default-pointer action.

@@ -269,3 +269,17 @@ name until upstream ships.
 > *"Tenha fé, porque até no lixão nasce flor."* — Mano Brown, Racionais MC's, *Vida Loka Pt. 1*
 > **"Have faith — because even in the lixão, a flower is born."**
 > (*lixão*: the vast open-air garbage mountain — see the translator's note in [`PROVENANCE.md`](PROVENANCE.md))
+
+## Published candidate status — 2026-09-07
+
+The earlier publication-open statements are preserved as history. Root published
+the [unpromoted prerelease `0.16.0+cgm.0399d2b19b`](https://github.com/danielcamposramos/cgm-zig/releases/tag/0.16.0%2Bcgm.0399d2b19b)
+at 14:18:54 UTC with the two frozen archives and `SHA256SUMS`: its recorded API
+verification matches 3/3 asset names, sizes and digests, not downloaded bytes.
+The [publication successor](docs/crown/CANDIDATE_RELEASE_2026-09-07.md#2026-09-07--executed-prerelease-publication)
+records tag `767784fec9` and online main `cf28537cb4` at that observation.
+Stable `0.16.0+cgm.046d6833` remains latest; `PROMOTED/zig` still selects
+`stage3-046d6833`. Clean-machine cost acceptance and default promotion remain
+UNFULFILLED. Neither stopped cost series resumed, and neither frozen archive
+contains the later observer/stopped-series evidence or these successor notes.
+Publication establishes no speedup, performance equivalence or Crown completion.

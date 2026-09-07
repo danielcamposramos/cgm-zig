@@ -230,3 +230,16 @@ UNFULFILLED; no further workload is authorized by these receipts. Both existing
 archives remain frozen without this later implementation/evidence. This status
 claims no comparison, speedup, online-main push, release, default promotion or
 crown-stage completion.
+
+## Published candidate successor — 2026-09-07
+
+Superseding only the historical publication-open status: root published the
+[unpromoted candidate prerelease](https://github.com/danielcamposramos/cgm-zig/releases/tag/0.16.0%2Bcgm.0399d2b19b)
+at 14:18:54 UTC, with 3/3 uploaded assets matched by recorded API names,
+sizes and digests. The [execution successor](CANDIDATE_RELEASE_2026-09-07.md#2026-09-07--executed-prerelease-publication)
+retains the full identities, source-main synchronization and API-only ceiling;
+no downloaded-byte readback was performed. Stable046d remains latest and the
+station default remains `stage3-046d6833`. Clean-machine cost acceptance and
+default promotion are still UNFULFILLED; both observed series stay stopped.
+No frozen archive was updated with later evidence or these notes. This closes
+bounded prerelease publication, not a Crown stage, performance or foundation gate.
