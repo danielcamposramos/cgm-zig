@@ -21,6 +21,13 @@ The index now has bounded rebuilt-candidate integration evidence, including
 Broken-hook controls and production OOM remain open; see the live-shadow
 receipt. This is not end-to-end speedup evidence or a new default.
 
+Update 2026-09-07: the [lost ordinary append-hook control](READY_INDEX_LOST_APPEND_CONTROL_2026-09-07.md)
+now fails by the intended membership assertion and passes after exact source
+restoration plus a separate compiler rebuild: all four fixture updates and
+2,095 same-state agreements. Lost-update-invalidation, default-entry and
+integration-OOM controls remain open. This closes one bounded control, not a
+crown stage, a new default, promotion or end-to-end speedup evidence.
+
 ## The problem, measured
 
 Zig performs whole-closure semantic analysis per compilation unit: one `build-exe`

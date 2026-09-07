@@ -95,6 +95,13 @@ checksum-restored rebuild/run, documented in
 [the self-control receipt](docs/crown/READY_INDEX_SELECTION_SELF_CONTROL_2026-09-07.md).
 Neither result substitutes for the still-open lost-hook and integration-OOM controls.
 
+Update 2026-09-07: the lost ordinary append hook now has its intended named
+failure, exact source restoration, and a separately rebuilt successful rerun:
+four expected updates, 2,095 same-state agreements and two active-growing puts.
+See [the lost-append control](docs/crown/READY_INDEX_LOST_APPEND_CONTROL_2026-09-07.md).
+Lost-update-invalidation, default-entry and integration-OOM controls remain open;
+this is not promotion or performance evidence.
+
 The same commit corrects status-tool promotion authority, diagnostic/sabotage
 instructions and the documented ReleaseSafe build switches. The fresh candidate
 build uses safety checks, debug extensions, logging and a baseline CPU target;
