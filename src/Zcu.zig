@@ -22,6 +22,7 @@ const Target = std.Target;
 const Ast = std.zig.Ast;
 
 const Compilation = @import("Compilation.zig");
+const LineMap = @import("LineMap.zig");
 const Cache = std.Build.Cache;
 pub const Value = @import("Value.zig");
 pub const Type = @import("Type.zig");
@@ -984,6 +985,70 @@ pub const Namespace = struct {
     }
 };
 
+/// If `path` names a file in a rendered (comment-stripped) machine tree, resolve
+/// its location back to the source it was rendered from, so a diagnostic never
+/// names the rendered tree. Returns null for an ordinary file, which is every
+/// file in an ordinary build.
+///
+/// The column is passed through untouched by design: a Zig line comment runs to
+/// end of line, so rendering only ever removes a suffix of a line and never a
+/// prefix, which makes the code prefix of any surviving line byte-exact. That is
+/// stated and proven by the renderer's column-law control, not assumed here.
+pub fn machineTreeSrc(
+    comp: *Compilation,
+    eb: *std.zig.ErrorBundle.Wip,
+    path: Compilation.Path,
+    /// ZERO-BASED, matching `std.zig.findLineColumn` and the `ErrorBundle`
+    /// field, which the bundle renderer prints as `line + 1`. The line map is
+    /// ONE-BASED, because that is what a person reads in an editor. The two
+    /// conventions meet here and nowhere else; getting this wrong reports a
+    /// real file at a plausible wrong line, which is the failure this whole
+    /// mechanism exists to prevent, so the conversion is explicit on both
+    /// sides rather than folded into an expression.
+    line_0based: u32,
+) Allocator.Error!?struct { src_path: std.zig.ErrorBundle.String, line: u32, source_line: ?std.zig.ErrorBundle.String } {
+    const gpa = comp.gpa;
+    const abs = path.toAbsolute(comp.dirs, gpa) catch return null;
+    defer gpa.free(abs);
+    const map = LineMap.load(gpa, comp.io, abs) orelse return null;
+    defer map.deinit(gpa);
+
+    // A map that is present but cannot answer is a NAMED failure. Reporting a
+    // plausible wrong line would send a reader to the wrong place with nothing
+    // to indicate it, which is worse than reporting the rendered location.
+    const rendered_1based = line_0based + 1;
+    const src_line = map.sourceLine(rendered_1based) catch |err| std.debug.panic(
+        "line map for '{s}' cannot resolve rendered line {d} ({s}). Refusing to " ++
+            "report a source location it cannot justify.",
+        .{ abs, rendered_1based, @errorName(err) },
+    );
+
+    // Show the SOURCE text of that line where it can be read. The rendered line
+    // is a byte prefix of it, so falling back is correct but would silently drop
+    // a trailing comment from the display.
+    var source_line: ?std.zig.ErrorBundle.String = null;
+    if (src_line != 0) read_line: {
+        const bytes = std.Io.Dir.cwd().readFileAlloc(comp.io, map.source_path, gpa, .limited(1 << 28)) catch break :read_line;
+        defer gpa.free(bytes);
+        var it = std.mem.splitScalar(u8, bytes, '\n');
+        var n: u32 = 0;
+        while (it.next()) |l| {
+            n += 1;
+            if (n == src_line) {
+                source_line = try eb.addString(std.mem.trimEnd(u8, l, "\r"));
+                break;
+            }
+        }
+    }
+
+    return .{
+        .src_path = try eb.addString(map.source_path),
+        // back to the bundle's zero-based convention
+        .line = if (src_line == 0) 0 else src_line - 1,
+        .source_line = source_line,
+    };
+}
+
 pub const File = struct {
     status: enum {
         /// We have not yet attempted to load this file.
@@ -1237,8 +1302,9 @@ pub const File = struct {
         zcu: *const Zcu,
         eb: *std.zig.ErrorBundle.Wip,
     ) Allocator.Error!std.zig.ErrorBundle.SourceLocationIndex {
+        const mt = try machineTreeSrc(zcu.comp, eb, file.path, 0);
         return eb.addSourceLocation(.{
-            .src_path = try eb.printString("{f}", .{file.path.fmt(zcu.comp)}),
+            .src_path = if (mt) |m| m.src_path else try eb.printString("{f}", .{file.path.fmt(zcu.comp)}),
             .span_start = 0,
             .span_main = 0,
             .span_end = 0,
@@ -1258,14 +1324,15 @@ pub const File = struct {
         const start = tree.tokenStart(tok);
         const end = start + tree.tokenSlice(tok).len;
         const loc = std.zig.findLineColumn(file.source.?, start);
+        const mt = try machineTreeSrc(zcu.comp, eb, file.path, @intCast(loc.line));
         return eb.addSourceLocation(.{
-            .src_path = try eb.printString("{f}", .{file.path.fmt(zcu.comp)}),
+            .src_path = if (mt) |m| m.src_path else try eb.printString("{f}", .{file.path.fmt(zcu.comp)}),
             .span_start = start,
             .span_main = start,
             .span_end = @intCast(end),
-            .line = @intCast(loc.line),
+            .line = if (mt) |m| m.line else @intCast(loc.line),
             .column = @intCast(loc.column),
-            .source_line = try eb.addString(loc.source_line),
+            .source_line = if (mt) |m| m.source_line orelse try eb.addString(loc.source_line) else try eb.addString(loc.source_line),
         });
     }
 };
@@ -5271,14 +5338,15 @@ fn addDependencyLoopErrorLine(
         return error.AlreadyReported;
     };
     const loc = std.zig.findLineColumn(source, span.main);
+    const mt = try machineTreeSrc(comp, eb, src_loc.file_scope.path, @intCast(loc.line));
     const eb_src = try eb.addSourceLocation(.{
-        .src_path = try eb.printString("{f}", .{src_loc.file_scope.path.fmt(comp)}),
+        .src_path = if (mt) |m| m.src_path else try eb.printString("{f}", .{src_loc.file_scope.path.fmt(comp)}),
         .span_start = span.start,
         .span_main = span.main,
         .span_end = span.end,
-        .line = @intCast(loc.line),
+        .line = if (mt) |m| m.line else @intCast(loc.line),
         .column = @intCast(loc.column),
-        .source_line = try eb.addString(loc.source_line),
+        .source_line = if (mt) |m| m.source_line orelse try eb.addString(loc.source_line) else try eb.addString(loc.source_line),
         .reference_trace_len = @intCast(ref_trace.len),
     });
     for (ref_trace) |rt| try eb.addReferenceTrace(rt);
@@ -5395,14 +5463,15 @@ fn addReferenceTraceFrame(
         return error.AlreadyReported;
     };
     const loc = std.zig.findLineColumn(source, span.main);
+    const rt_mt = try machineTreeSrc(zcu.comp, eb, src.file_scope.path, @intCast(loc.line));
     try ref_trace.append(gpa, .{
         .decl_name = try eb.printString("{s}{s}", .{ name, if (inlined) " [inlined]" else "" }),
         .src_loc = try eb.addSourceLocation(.{
-            .src_path = try eb.printString("{f}", .{src.file_scope.path.fmt(zcu.comp)}),
+            .src_path = if (rt_mt) |m| m.src_path else try eb.printString("{f}", .{src.file_scope.path.fmt(zcu.comp)}),
             .span_start = span.start,
             .span_main = span.main,
             .span_end = span.end,
-            .line = @intCast(loc.line),
+            .line = if (rt_mt) |m| m.line else @intCast(loc.line),
             .column = @intCast(loc.column),
             .source_line = 0,
         }),

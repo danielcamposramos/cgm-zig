@@ -42,6 +42,10 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Tokenizer = std.zig.Tokenizer;
 const Sha256 = std.crypto.hash.sha2.Sha256;
+/// The line-map format has ONE declaration, in the compiler's own module. The
+/// renderer writes maps through it and `Zcu` reads them through it, so the two
+/// sides cannot drift apart.
+const LineMap = @import("LineMap");
 
 /// Bumped whenever rendering output could change for unchanged input. It is a
 /// manifest field so a stale tree re-renders instead of being trusted.
@@ -80,6 +84,12 @@ const Rendered = struct {
     comments: []Comment,
     /// keep mode: always 0. compact mode: lines dropped because they became blank.
     lines_dropped: usize,
+    /// compact mode only: `map[i]` is the 1-based SOURCE line of rendered line
+    /// i+1. Empty in keep mode, where the mapping is the identity by
+    /// construction. Built by the same pass that drops the lines -- never
+    /// re-derived afterwards by diffing, which could disagree with what was
+    /// actually written.
+    map: []u32,
 };
 
 /// A byte between two tokens that is neither whitespace nor the start of a
@@ -126,18 +136,22 @@ fn render(gpa: Allocator, src: [:0]const u8, mode: Mode) RenderError!Rendered {
 
     var dropped: usize = 0;
     if (mode == .compact) {
-        const compacted = try compact(gpa, src, mr.items, &dropped);
+        var map: std.ArrayList(u32) = .empty;
+        errdefer map.deinit(gpa);
+        const compacted = try compact(gpa, src, mr.items, &dropped, &map);
         mr.deinit(gpa);
         return .{
             .mr = compacted,
             .comments = try comments.toOwnedSlice(gpa),
             .lines_dropped = dropped,
+            .map = try map.toOwnedSlice(gpa),
         };
     }
     return .{
         .mr = try mr.toOwnedSliceSentinel(gpa, 0),
         .comments = try comments.toOwnedSlice(gpa),
         .lines_dropped = 0,
+        .map = &.{},
     };
 }
 
@@ -176,15 +190,23 @@ fn isBlank(s: []const u8) bool {
 /// Drop only the lines that comment removal EMPTIED. A line blank in the source
 /// stays blank in the output: that spacing is authored, and deleting it would
 /// make `compact` a reformatter rather than a comment stripper.
-fn compact(gpa: Allocator, src: []const u8, keep_bytes: []const u8, dropped: *usize) Allocator.Error![:0]u8 {
+fn compact(
+    gpa: Allocator,
+    src: []const u8,
+    keep_bytes: []const u8,
+    dropped: *usize,
+    map: *std.ArrayList(u32),
+) Allocator.Error![:0]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
 
     var src_it = std.mem.splitScalar(u8, src, '\n');
     var keep_it = std.mem.splitScalar(u8, keep_bytes, '\n');
     var first = true;
+    var src_line: u32 = 0;
     while (keep_it.next()) |kl| {
         const sl = src_it.next() orelse "";
+        src_line += 1;
         if (isBlank(kl) and !isBlank(sl)) {
             dropped.* += 1;
             continue;
@@ -192,6 +214,10 @@ fn compact(gpa: Allocator, src: []const u8, keep_bytes: []const u8, dropped: *us
         if (!first) try out.append(gpa, '\n');
         first = false;
         try out.appendSlice(gpa, kl);
+        // This line survives, and it is the next rendered line. Recording the
+        // pairing HERE -- inside the loop that decides it -- is what makes the
+        // map exact rather than a reconstruction.
+        try map.append(gpa, src_line);
     }
     return out.toOwnedSliceSentinel(gpa, 0);
 }
@@ -229,6 +255,84 @@ fn verifyTokens(src: [:0]const u8, mr: [:0]const u8) ?Mismatch {
         };
         if (ta.tag == .eof) return null;
     }
+}
+
+const LineMismatch = struct {
+    rendered_line: u32,
+    source_line: u32,
+    why: []const u8,
+};
+
+/// Line slices, indexed once per file. The first version of this walked the
+/// text from the start for every line, which is O(n^2) per file and took the
+/// whole-tree check from seconds to minutes. Indexing once is the fix.
+fn lineIndex(gpa: Allocator, text: []const u8) Allocator.Error![][]const u8 {
+    var lines: std.ArrayList([]const u8) = .empty;
+    errdefer lines.deinit(gpa);
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |l| try lines.append(gpa, l);
+    return lines.toOwnedSlice(gpa);
+}
+
+/// THE MAP LAW: for every rendered line, the tokens of that line must equal the
+/// tokens of the source line the map points at. Checked per line, not per file,
+/// so a map that is off by one anywhere is caught exactly where it is wrong.
+///
+/// THE COLUMN LAW, checked in the same pass: the rendered line must be a byte
+/// PREFIX of its source line once trailing whitespace is discounted. That is
+/// what makes a column need no mapping, and it is checked rather than assumed.
+fn verifyMap(gpa: Allocator, src: []const u8, mr: []const u8, map: []const u32) Allocator.Error!?LineMismatch {
+    const src_lines = try lineIndex(gpa, src);
+    defer gpa.free(src_lines);
+    const mr_lines = try lineIndex(gpa, mr);
+    defer gpa.free(mr_lines);
+
+    var buf_a: std.ArrayList(u8) = .empty;
+    defer buf_a.deinit(gpa);
+    var buf_b: std.ArrayList(u8) = .empty;
+    defer buf_b.deinit(gpa);
+
+    for (map, 0..) |source_line, i| {
+        if (i >= mr_lines.len or source_line == 0 or source_line > src_lines.len) return .{
+            .rendered_line = @intCast(i + 1),
+            .source_line = source_line,
+            .why = "map entry points outside the file",
+        };
+        const ml = mr_lines[i];
+        const sl = src_lines[source_line - 1];
+
+        const ml_trim = std.mem.trimEnd(u8, ml, " \t\r");
+        const sl_trim = std.mem.trimEnd(u8, sl, " \t\r");
+        if (!std.mem.startsWith(u8, sl_trim, ml_trim)) return .{
+            .rendered_line = @intCast(i + 1),
+            .source_line = source_line,
+            .why = "rendered line is not a byte prefix of its source line (column law)",
+        };
+
+        buf_a.clearRetainingCapacity();
+        try buf_a.appendSlice(gpa, ml);
+        try buf_a.append(gpa, 0);
+        buf_b.clearRetainingCapacity();
+        try buf_b.appendSlice(gpa, sl);
+        try buf_b.append(gpa, 0);
+        const a = buf_a.items[0 .. buf_a.items.len - 1 :0];
+        const b = buf_b.items[0 .. buf_b.items.len - 1 :0];
+
+        var ta: Tokenizer = .init(a);
+        var tb: Tokenizer = .init(b);
+        while (true) {
+            const x = ta.next();
+            var y = tb.next();
+            while (y.tag == .doc_comment or y.tag == .container_doc_comment) y = tb.next();
+            if (x.tag != y.tag or !std.mem.eql(u8, a[x.loc.start..x.loc.end], b[y.loc.start..y.loc.end])) return .{
+                .rendered_line = @intCast(i + 1),
+                .source_line = source_line,
+                .why = "token stream of the rendered line differs from its source line",
+            };
+            if (x.tag == .eof) break;
+        }
+    }
+    return null;
 }
 
 fn countTokens(s: [:0]const u8) usize {
@@ -361,6 +465,9 @@ pub fn main(init: std.process.Init) !void {
     var stdout_writer = Io.File.stdout().writerStreaming(io, &stdout_buf);
     const out = &stdout_writer.interface;
 
+    // std.fs has no cwd() here; the current path comes from `process` via `Io`.
+    const cwd_abs = try std.process.currentPathAlloc(io, arena);
+    const root_abs = try std.fs.path.resolve(arena, &.{ cwd_abs, root });
     var root_dir = try Io.Dir.cwd().openDir(io, root, .{});
     defer root_dir.close(io);
     try Io.Dir.cwd().createDirPath(io, out_path);
@@ -368,7 +475,10 @@ pub fn main(init: std.process.Init) !void {
     defer dest.close(io);
 
     var rows: std.ArrayList(Row) = .empty;
-    defer rows.deinit(gpa);
+    defer {
+        for (rows.items) |r| gpa.free(r.path);
+        rows.deinit(gpa);
+    }
 
     var total_src: usize = 0;
     var total_mr: usize = 0;
@@ -380,6 +490,9 @@ pub fn main(init: std.process.Init) !void {
     var zig_seen: usize = 0;
     var mirrored_bytes: usize = 0;
     var line_mismatches: usize = 0;
+    var map_mismatches: usize = 0;
+    var map_lines: usize = 0;
+    var map_bytes: usize = 0;
 
     for (dirs.items) |sub| {
         var sd = root_dir.openDir(io, sub, .{ .iterate = true }) catch |err|
@@ -443,6 +556,7 @@ pub fn main(init: std.process.Init) !void {
             };
             defer gpa.free(r.mr);
             defer gpa.free(r.comments);
+            defer gpa.free(r.map);
 
             // In --check mode the thing under test is the tree ON DISK, not the
             // bytes we just produced: a rendered file that was corrupted after
@@ -475,12 +589,41 @@ pub fn main(init: std.process.Init) !void {
             const hr = try writeHr(gpa, rel, r.comments);
             defer gpa.free(hr);
 
+            // The map is a product of rendering, emitted for every rendered
+            // file: `compact` carries an explicit table, `keep` records only the
+            // source path, because even there the PATH differs and a diagnostic
+            // must never name the rendered tree.
+            // The sidecar records the ABSOLUTE source path. It has to be
+            // self-sufficient at error time -- that is the whole reason it is a
+            // sidecar and not a table -- and the reporter has no other way to
+            // learn where the tree was rendered from. The rendered tree is a
+            // build-time artifact of one machine, so this costs nothing that was
+            // portable to begin with.
+            const src_abs = try std.fs.path.resolve(gpa, &.{ root_abs, rel });
+            defer gpa.free(src_abs);
+            const map_kind: LineMap.Kind = if (line_mode == .compact) .explicit else .identity;
+            const map_bytes_buf = try LineMap.serialize(gpa, map_kind, src_abs, r.map);
+            defer gpa.free(map_bytes_buf);
+            map_lines += r.map.len;
+            map_bytes += map_bytes_buf.len;
+
+            if (verify and line_mode == .compact) {
+                if (try verifyMap(gpa, src, r.mr, r.map)) |m| {
+                    map_mismatches += 1;
+                    try out.print("MAP MISMATCH {s}: rendered line {d} -> source line {d}: {s}\n",
+                        .{ rel, m.rendered_line, m.source_line, m.why });
+                }
+            }
+
             var did = false;
             if (!check_only) {
                 did = try writeIfDifferent(io, dest, gpa, rel, r.mr);
                 const hr_rel = try std.fmt.allocPrint(gpa, "hr/{s}.md", .{rel});
                 defer gpa.free(hr_rel);
                 _ = try writeIfDifferent(io, dest, gpa, hr_rel, hr);
+                const map_rel = try std.fmt.allocPrint(gpa, "{s}{s}", .{ rel, LineMap.extension });
+                defer gpa.free(map_rel);
+                _ = try writeIfDifferent(io, dest, gpa, map_rel, map_bytes_buf);
                 if (did) rewritten += 1;
             }
 
@@ -516,13 +659,16 @@ pub fn main(init: std.process.Init) !void {
             total_src - total_mr,
             @as(f64, @floatFromInt(total_src - total_mr)) * 100.0 / @as(f64, @floatFromInt(total_src)),
         });
-        if (line_mode == .compact) try out.print("lines_dropped={d}\n", .{total_dropped});
+        if (line_mode == .compact) try out.print("lines_dropped={d} map_lines={d} map_bytes={d}\n",
+            .{ total_dropped, map_lines, map_bytes });
         if (line_mode == .keep) try out.print("line_mismatches={d}\n", .{line_mismatches});
         if (verify) try out.print("tokens_compared={d} mismatches={d}\n", .{ total_tokens, mismatches });
+        if (verify and line_mode == .compact) try out.print("map_lines_checked={d} map_mismatches={d}\n",
+            .{ map_lines, map_mismatches });
     }
     try out.flush();
 
-    if (mismatches != 0 or line_mismatches != 0) std.process.exit(1);
+    if (mismatches != 0 or line_mismatches != 0 or map_mismatches != 0) std.process.exit(1);
 }
 
 /// Write only when the bytes actually differ, so an unchanged render leaves the

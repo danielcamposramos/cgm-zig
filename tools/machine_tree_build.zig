@@ -73,6 +73,17 @@ pub fn resolve(b: *std.Build) ?Tree {
             .root_source_file = b.path("tools/machine_tree.zig"),
             .target = b.graph.host,
             .optimize = .ReleaseFast,
+            .imports = &.{.{
+                // The line-map format is declared once, in the compiler's own
+                // module; the renderer writes through the same declaration the
+                // compiler reads through, so the two cannot drift.
+                .name = "LineMap",
+                .module = b.createModule(.{
+                    .root_source_file = b.path("src/LineMap.zig"),
+                    .target = b.graph.host,
+                    .optimize = .ReleaseFast,
+                }),
+            }},
         }),
     });
 

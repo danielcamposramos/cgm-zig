@@ -4055,7 +4055,10 @@ pub fn getAllErrorsAlloc(comp: *Compilation) error{OutOfMemory}!ErrorBundle {
                     .illegal_zig_import => try bundle.addString("this compiler implementation does not allow importing files from this directory"),
                 },
                 .src_loc = try bundle.addSourceLocation(.{
-                    .src_path = try bundle.printString("{f}", .{file.path.fmt(comp)}),
+                    .src_path = if (try Zcu.machineTreeSrc(comp, &bundle, file.path, 0)) |m|
+                        m.src_path
+                    else
+                        try bundle.printString("{f}", .{file.path.fmt(comp)}),
                     .span_start = start,
                     .span_main = start,
                     .span_end = @intCast(end),
@@ -4419,14 +4422,18 @@ pub fn addModuleErrorMsg(
         try zcu.populateReferenceTrace(root, frame_limit, eb, &ref_traces);
     }
 
+    // A rendered (machine-tree) file reports the SOURCE it was rendered from.
+    // This is the PRIMARY diagnostic location -- the line the user reads first --
+    // and it is a separate site from the reference-trace entries in `Zcu`.
+    const err_mt = try Zcu.machineTreeSrc(zcu.comp, eb, err_src_loc.file_scope.path, @intCast(err_loc.line));
     const src_loc = try eb.addSourceLocation(.{
-        .src_path = try eb.printString("{f}", .{err_src_loc.file_scope.path.fmt(zcu.comp)}),
+        .src_path = if (err_mt) |m| m.src_path else try eb.printString("{f}", .{err_src_loc.file_scope.path.fmt(zcu.comp)}),
         .span_start = err_span.start,
         .span_main = err_span.main,
         .span_end = err_span.end,
-        .line = @intCast(err_loc.line),
+        .line = if (err_mt) |m| m.line else @intCast(err_loc.line),
         .column = @intCast(err_loc.column),
-        .source_line = try eb.addString(err_loc.source_line),
+        .source_line = if (err_mt) |m| m.source_line orelse try eb.addString(err_loc.source_line) else try eb.addString(err_loc.source_line),
         .reference_trace_len = @intCast(ref_traces.items.len),
     });
 
@@ -4450,19 +4457,20 @@ pub fn addModuleErrorMsg(
         };
         const loc = std.zig.findLineColumn(source, span.main);
 
+        const note_mt = try Zcu.machineTreeSrc(zcu.comp, eb, note_src_loc.file_scope.path, @intCast(loc.line));
         const omit_source_line = loc.eql(err_loc) or (last_note_loc != null and loc.eql(last_note_loc.?));
         last_note_loc = loc;
 
         const gop = try notes.getOrPutContext(gpa, .{
             .msg = try eb.addString(module_note.msg),
             .src_loc = try eb.addSourceLocation(.{
-                .src_path = try eb.printString("{f}", .{note_src_loc.file_scope.path.fmt(zcu.comp)}),
+                .src_path = if (note_mt) |m| m.src_path else try eb.printString("{f}", .{note_src_loc.file_scope.path.fmt(zcu.comp)}),
                 .span_start = span.start,
                 .span_main = span.main,
                 .span_end = span.end,
-                .line = @intCast(loc.line),
+                .line = if (note_mt) |m| m.line else @intCast(loc.line),
                 .column = @intCast(loc.column),
-                .source_line = if (omit_source_line) 0 else try eb.addString(loc.source_line),
+                .source_line = if (omit_source_line) 0 else if (note_mt) |m| m.source_line orelse try eb.addString(loc.source_line) else try eb.addString(loc.source_line),
             }),
         }, .{ .eb = eb });
         if (gop.found_existing) {

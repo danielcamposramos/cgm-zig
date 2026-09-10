@@ -31,8 +31,8 @@ The columns are cumulative and each has a single, checkable meaning:
 |---|---|---|---|
 | **P046** | `PROMOTED/stage3-046d6833/bin/zig` | `046d6833e17c32856223` | `b991cb16` |
 | **P-D6** | `PROMOTED/stage3-d6b4168f/bin/zig` — today's station default | `d6b4168f368b95e83d2a` | `0399d2b19b` |
-| **I-C6** | `/K3D/CGM_Forge.local/crown_sig_2026_09_08/cmakebuild/stage3/bin/zig` | `c6db06a078b5a7702a1b` | dirty tree, 2026-09-08 17:42 |
-| **I-AB** | `/K3D/CGM_Forge.local/crown_sig_2026_09_10/stage3/bin/zig` — the traced rebuild | `ab62ba330cc2f93b00f7` | dirty tree + comment fixes, 2026-09-10 |
+| **I-C6** | `<evidence-2026-09-08>/cmakebuild/stage3/bin/zig` | `c6db06a078b5a7702a1b` | dirty tree, 2026-09-08 17:42 |
+| **I-AB** | `<evidence>/stage3/bin/zig` — the traced rebuild | `ab62ba330cc2f93b00f7` | dirty tree + comment fixes, 2026-09-10 |
 | **none** | in no built binary | — | — |
 
 `git diff --stat 0399d2b19b HEAD -- src/ lib/` is **empty**: every committed

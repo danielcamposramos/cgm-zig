@@ -7,9 +7,13 @@ It proves INPUT COVERAGE and nothing beyond it. Stage 2b remains unimplemented.*
 
 ## The binary — built for this, and verified to contain the instrument
 
+*`<evidence>` below is the station-local build/evidence directory for this
+date. This repository is public, so machine-specific absolute paths are not
+recorded here; the sha256 is the identity that matters and it is exact.*
+
 | | |
 |---|---|
-| path | `/K3D/CGM_Forge.local/crown_sig_2026_09_10/stage3/bin/zig` |
+| path | `<evidence>/stage3/bin/zig` |
 | sha256 | `ab62ba330cc2f93b00f72d34b2ae5747b3b4bd3954755a70dd8e17c7949b8dde` |
 | exit / wall / peak RSS | **0** · 1,657.25 s · 6,310,164 kB |
 | `strings ... | grep -c cgm-dwoid` | **1** (the merged format prefix) — the prior binary `c6db06a0…` has **0** |

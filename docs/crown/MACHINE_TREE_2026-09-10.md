@@ -107,7 +107,7 @@ proving nothing — the guard had to be built so it *could* fail.
 
 | | |
 |---|---|
-| binary | `/K3D/CGM_Forge.local/crown_sig_2026_09_10/stage3_mr/bin/zig` |
+| binary | `<evidence>/stage3_mr/bin/zig` |
 | sha256 | `f2f86724c3e01ed05767705155cf92846615752f1969bd5a27dd696d9efeb75e` |
 | exit / wall / peak RSS | **0** · 1,743.27 s · 6,473,864 kB |
 | `zig version` | `0.16.0` |
