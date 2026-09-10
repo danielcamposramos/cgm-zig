@@ -60,6 +60,9 @@ const usage =
     \\  --check          verify the EXISTING rendered tree against the source and
     \\                   write NOTHING. Names the first mismatching token per file.
     \\  --quiet          only the summary line
+    \\  --tokenize-only  walk and tokenize only; write nothing. The instrument for
+    \\                   comparing a tokenizer pass over the commented tree with one
+    \\                   over the MR tree.
     \\
 ;
 
@@ -305,6 +308,7 @@ pub fn main(init: std.process.Init) !void {
     var mode: ?Mode = null;
     var verify = false;
     var check_only = false;
+    var tokenize_only = false;
     var quiet = false;
     var dirs: std.ArrayList([]const u8) = .empty;
 
@@ -333,6 +337,8 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, a, "--check")) {
             check_only = true;
             verify = true;
+        } else if (std.mem.eql(u8, a, "--tokenize-only")) {
+            tokenize_only = true;
         } else if (std.mem.eql(u8, a, "--quiet")) {
             quiet = true;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
@@ -371,6 +377,7 @@ pub fn main(init: std.process.Init) !void {
     var mismatches: usize = 0;
     var rewritten: usize = 0;
     var mirrored: usize = 0;
+    var zig_seen: usize = 0;
     var mirrored_bytes: usize = 0;
     var line_mismatches: usize = 0;
 
@@ -418,6 +425,13 @@ pub fn main(init: std.process.Init) !void {
                 0,
             );
             defer gpa.free(src);
+
+            if (tokenize_only) {
+                total_tokens += countTokens(src);
+                total_src += src.len;
+                zig_seen += 1;
+                continue;
+            }
 
             const r = render(gpa, src, line_mode) catch |err| switch (err) {
                 error.UnexpectedByteBetweenTokens => fatal(
@@ -489,6 +503,11 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    if (tokenize_only) {
+        try out.print("tokenize_only files={d} bytes={d} tokens={d}\n", .{ zig_seen, total_src, total_tokens });
+        try out.flush();
+        return;
+    }
     if (!check_only) try writeManifest(io, dest, gpa, rows.items, line_mode, out_path);
 
     if (!quiet) {
