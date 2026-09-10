@@ -9,6 +9,7 @@ const Io = std.Io;
 
 const tests = @import("test/tests.zig");
 const DevEnv = @import("src/dev.zig").Env;
+const mtree_build = @import("tools/machine_tree_build.zig");
 
 const zig_version: std.SemanticVersion = .{ .major = 0, .minor = 16, .patch = 0 };
 const stack_size = 46 * 1024 * 1024;
@@ -200,6 +201,8 @@ pub fn build(b: *std.Build) !void {
         break :blk 4;
     };
 
+    const mtree = mtree_build.resolve(b);
+
     const exe = addCompilerStep(b, .{
         .optimize = optimize,
         .target = target,
@@ -207,6 +210,7 @@ pub fn build(b: *std.Build) !void {
         .valgrind = valgrind,
         .sanitize_thread = sanitize_thread,
         .single_threaded = single_threaded,
+        .machine_tree = mtree,
     });
     exe.pie = pie;
     exe.entitlements = entitlements;
@@ -747,11 +751,21 @@ const AddCompilerModOptions = struct {
     valgrind: ?bool = null,
     sanitize_thread: ?bool = null,
     single_threaded: ?bool = null,
+    /// Non-null only for the FINAL executable, and only when -Dmachine-tree was
+    /// given. Tests and tooling leave it null and compile the commented sources.
+    machine_tree: ?mtree_build.Tree = null,
 };
 
 fn addCompilerMod(b: *std.Build, options: AddCompilerModOptions) *std.Build.Module {
+    // The FINAL executable compiles from the comment-stripped tree and from
+    // nothing else; every other consumer keeps the commented sources.
+    const main_src, const aro_src = if (options.machine_tree) |t|
+        .{ t.rootSource(b, "src/main.zig"), t.rootSource(b, "lib/compiler/aro/aro.zig") }
+    else
+        .{ b.path("src/main.zig"), b.path("lib/compiler/aro/aro.zig") };
+
     const compiler_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = main_src,
         .target = options.target,
         .optimize = options.optimize,
         .strip = options.strip,
@@ -761,7 +775,7 @@ fn addCompilerMod(b: *std.Build, options: AddCompilerModOptions) *std.Build.Modu
     });
 
     const aro_mod = b.createModule(.{
-        .root_source_file = b.path("lib/compiler/aro/aro.zig"),
+        .root_source_file = aro_src,
     });
 
     compiler_mod.addImport("aro", aro_mod);
@@ -785,6 +799,13 @@ fn addCompilerStep(b: *std.Build, options: AddCompilerModOptions) *std.Build.Ste
 
     exe.link_function_sections = function_data_sections;
     exe.link_data_sections = function_data_sections;
+
+    if (options.machine_tree) |t| {
+        // Its own std comes from the rendered tree too, and the render must have
+        // run before this compile starts.
+        exe.zig_lib_dir = t.libDir(b);
+        exe.step.dependOn(t.render);
+    }
 
     return exe;
 }
