@@ -763,6 +763,122 @@ pub const Object = struct {
         lto: std.zig.LtoMode,
     };
 
+    /// The content identity of the debug information this module is about to
+    /// emit, published as the compile unit's `DW_AT_GNU_dwo_id`.
+    ///
+    /// Cross-compilation debug reuse needs to know when two compilations' debug
+    /// information is INTERCHANGEABLE. Source identity alone does not establish
+    /// that, so this folds the things that change the emitted description even
+    /// when the sources are the same: the exact compiler, the target and ABI,
+    /// and the optimization mode --- together with the content of every file
+    /// that actually contributed debug information to this unit.
+    ///
+    /// The per-file content is taken from ZIR, not from `File.source` and not
+    /// from `InternPool` `bin_digest`. MEASURED: `source` is `null` whenever the
+    /// ZIR cache was warm, so a source-based identity silently vanished on the
+    /// second compilation of the same input; and `bin_digest` is
+    /// `Compilation.Path.digest()`, which hashes the PATH, so it would equate
+    /// two different files at the same path. ZIR is the representation that was
+    /// actually compiled, and it must exist for a file to have contributed
+    /// debug information at all.
+    ///
+    /// It is FAIL-CLOSED: if any contributing file has no ZIR, no identity is
+    /// claimed and zero is returned, leaving the DWARF default. A partial
+    /// identity would claim interchangeability it cannot support, which is the
+    /// one failure this must never have.
+    fn debugContentIdentity(o: *Object) u64 {
+        const zcu = o.zcu;
+        const comp = zcu.comp;
+        const target = &comp.root_mod.resolved_target.result;
+
+        var hasher: std.hash.Wyhash = .init(0);
+        hasher.update(build_options.version);
+        std.hash.autoHash(&hasher, target.cpu.arch);
+        std.hash.autoHash(&hasher, target.os.tag);
+        std.hash.autoHash(&hasher, target.abi);
+        std.hash.autoHash(&hasher, target.ofmt);
+        std.hash.autoHash(&hasher, comp.root_mod.optimize_mode);
+
+        // Fold each contributing file to its own digest, then combine in SORTED
+        // DIGEST ORDER. Neither hash map iteration order nor `Zcu.File.Index`
+        // is stable across processes: `File.Index.unwrap` splits into
+        // `{tid, index}` over a worker-thread partition -- see
+        // `Zcu.fileRootType` (`src/Zcu.zig`), which reaches the file through
+        // `getLocalShared(unwrapped.tid)` -- so the index a file receives
+        // depends on which worker happened to load it. Sorting the digests
+        // removes both dependencies. This is a STRUCTURAL argument about the
+        // index encoding, not a measurement.
+        //
+        // RETIRED CLAIM, quoted so the next reader inherits the negative
+        // result: this comment previously read "MEASURED: ordering by that
+        // index gave ONE program two DIFFERENT identities on two builds of
+        // identical input". That measurement is VOID. It was taken on a STALE
+        // binary -- in that session only the first cmake build ever
+        // regenerated stage3; the later ones reported "Built target stage3"
+        // without rebuilding it, so every conclusion drawn from them is
+        // unproven. The sort stays on the structural argument above.
+        var digests: std.ArrayList(u64) = .empty;
+        defer digests.deinit(comp.gpa);
+        digests.ensureTotalCapacity(comp.gpa, o.debug_file_map.count()) catch {
+            // Refusal is traced, and NO final identity line is emitted, so a
+            // reader can never mistake an early zero for a folded identity.
+            log.debug("cgm-dwoid unit='{s}' kind=refused why=capacity", .{comp.root_name});
+            return 0;
+        };
+        var it = o.debug_file_map.keyIterator();
+        while (it.next()) |file_index| {
+            const file = zcu.fileByIndex(file_index.*);
+            const zir = file.zir orelse {
+                log.debug("cgm-dwoid unit='{s}' kind=refused why=missing_zir idx={d} path={s}", .{
+                    comp.root_name, @intFromEnum(file_index.*), file.sub_file_path,
+                });
+                return 0; // fail closed
+            };
+            var file_hasher: std.hash.Wyhash = .init(0);
+            file_hasher.update(file.sub_file_path);
+            file_hasher.update(zir.string_bytes);
+            file_hasher.update(std.mem.sliceAsBytes(zir.extra));
+            file_hasher.update(std.mem.sliceAsBytes(zir.instructions.items(.tag)));
+            // `Zir.Inst.Data` is a BARE union (`lib/std/zig/Zir.zig`, `pub
+            // const Data = union {` -- untagged, not `extern`, not `packed`),
+            // so the bytes of its inactive fields are UNDEFINED. Folding
+            // undefined memory into a value whose whole purpose is to be
+            // reproducible is unsound by construction. Operand payloads live
+            // in `extra`, which is fully defined, so hashing the tags plus
+            // `extra` plus the instruction count loses nothing real. This is a
+            // LANGUAGE fact and needs no measurement to stand.
+            //
+            // RETIRED CLAIM, quoted rather than deleted: this comment
+            // previously read "MEASURED: hashing them gave three different
+            // identities for three builds of one ReleaseSafe program while the
+            // contributing file set was identical (293 files both runs) and
+            // Debug was stable 3/3". BOTH halves are VOID. The runs were on
+            // the stale binary described above, and the "Debug stable 3/3"
+            // figure was `compiler_rt`'s identity, never the program's: at
+            // `-ODebug` the program units go through the SELF-HOSTED backend,
+            // which sets no `dwo_id` at all, so Debug is not a valid axis for
+            // this mechanism. ReleaseSafe vs ReleaseFast is; both are LLVM.
+            std.hash.autoHash(&file_hasher, zir.instructions.len);
+            const file_digest = file_hasher.final();
+            digests.appendAssumeCapacity(file_digest);
+            // Trace ONLY values this fold already computed: no path is resolved
+            // and no source bytes are emitted, so the trace adds no work to the
+            // hashed path and cannot itself change the identity.
+            log.debug("cgm-dwoid unit='{s}' kind=file idx={d} digest=0x{x:0>16} zir_strings={d} zir_extra={d} zir_insts={d} path={s}", .{
+                comp.root_name,      @intFromEnum(file_index.*), file_digest,
+                zir.string_bytes.len, zir.extra.len,             zir.instructions.len,
+                file.sub_file_path,
+            });
+        }
+        std.mem.sort(u64, digests.items, {}, std.sort.asc(u64));
+        hasher.update(std.mem.sliceAsBytes(digests.items));
+        const identity = hasher.final();
+        log.debug("cgm-dwoid unit='{s}' kind=final identity=0x{x:0>16} folded={d}", .{
+            comp.root_name, identity, digests.items.len,
+        });
+        return identity;
+    }
+
     pub fn emit(o: *Object, pt: Zcu.PerThread, options: EmitOptions) error{ LinkFailure, OutOfMemory }!void {
         const zcu = o.zcu;
         const comp = zcu.comp;
@@ -808,6 +924,35 @@ pub const Object = struct {
                     o.debug_globals_fwd_ref.unwrap().?,
                     try o.builder.metadataTuple(o.debug_globals.items),
                 );
+
+                // AFTER all debug metadata is resolved. `flushTypePool` and the
+                // type lowering it drives admit further files through
+                // `getDebugFile`, so computing this earlier would hash a
+                // snapshot taken before those admissions. That ordering
+                // argument is STRUCTURAL and is the reason the call sits here.
+                //
+                // CORRECTED 2026-09-10 --- the number this comment used to cite
+                // was not evidence for the move. It read: "MEASURED at the
+                // earlier position: 85 files admitted while the emitted
+                // artifact referenced 293 line-table files and 299 distinct
+                // `DW_AT_decl_file` paths --- an identity blind to most of what
+                // it claims to identify." Those artifact-side figures span the
+                // WHOLE BINARY, which holds two compile units, while the 85 is
+                // one unit's map. `DW_AT_decl_file` is a per-CU index into that
+                // CU's own `file_names`, so rendering paths across CUs and
+                // deduplicating them mixes two index spaces. Re-measured on the
+                // same artifact, per compile unit: the program unit `root` has
+                // 85 `DW_AT_decl_file` paths and 85 line-table paths --- exactly
+                // the admitted count --- and `compiler_rt`, a SEPARATE
+                // compilation, has 220. The 299 is 85 + 220 minus the 6 paths
+                // both units share. There was no 85-versus-299 shortfall to
+                // close.
+                //
+                // What that re-measurement does NOT establish: it says nothing
+                // about what the earlier call site admitted, because the code no
+                // longer computes there. The move stands on the ordering
+                // argument above, not on the retired figures.
+                o.builder.dwo_id = o.debugContentIdentity();
             }
         }
 
@@ -1937,6 +2082,14 @@ pub const Object = struct {
         const path = o.zcu.fileByIndex(file_index).path;
         const abs_path = try path.toAbsolute(o.zcu.comp.dirs, gpa);
         defer gpa.free(abs_path);
+
+        // Correlation only: the SAME file index the identity fold traces, paired
+        // with the absolute path DWARF will store. Emitted here because
+        // `abs_path` is already allocated and still alive; the fold itself
+        // resolves no paths, so its failure behaviour is untouched.
+        log.debug("cgm-dwoid unit='{s}' kind=abspath idx={d} path={s}", .{
+            o.zcu.comp.root_name, @intFromEnum(file_index), abs_path,
+        });
 
         gop.value_ptr.* = try o.builder.debugFile(
             try o.builder.metadataString(std.fs.path.basename(abs_path)),

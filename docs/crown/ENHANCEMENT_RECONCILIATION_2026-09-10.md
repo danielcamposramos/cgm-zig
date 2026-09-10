@@ -32,6 +32,7 @@ The columns are cumulative and each has a single, checkable meaning:
 | **P046** | `PROMOTED/stage3-046d6833/bin/zig` | `046d6833e17c32856223` | `b991cb16` |
 | **P-D6** | `PROMOTED/stage3-d6b4168f/bin/zig` — today's station default | `d6b4168f368b95e83d2a` | `0399d2b19b` |
 | **I-C6** | `/K3D/CGM_Forge.local/crown_sig_2026_09_08/cmakebuild/stage3/bin/zig` | `c6db06a078b5a7702a1b` | dirty tree, 2026-09-08 17:42 |
+| **I-AB** | `/K3D/CGM_Forge.local/crown_sig_2026_09_10/stage3/bin/zig` — the traced rebuild | `ab62ba330cc2f93b00f7` | dirty tree + comment fixes, 2026-09-10 |
 | **none** | in no built binary | — | — |
 
 `git diff --stat 0399d2b19b HEAD -- src/ lib/` is **empty**: every committed
@@ -99,7 +100,7 @@ compiler change at HEAD is inside **P-D6**. The five dirty owners are not.
 | G1 | **One shared debug artifact across a build sweep** — DWARF dedup-by-reference (stage 2b; *this is the enhancement Daniel actually asked for*) | yes — PLAN stage 2b | **no** | no | **none** | no | no | **NOT IMPLEMENTED.** The 2026-09-08 scope correction at the top of `PLAN.md` is binding and this ledger re-affirms it. The blocker is cited in `CROSS_PROCESS_SIGNATURE.md`: unit indices are asserted lockstep across five sections (`src/link/Dwarf.zig:2538-2555`) and the `.debug_info` header writer hardcodes `DW.UT.compile` (`:4866`). Decoupling the per-section unit index spaces is a refactor, not a packet-sized edit. |
 | G2 | **Intra-emitter qualifier-DIE sharing** (`const_type` entries shared per unit/target/kind) | yes — a sub-part of 2b | yes — `src/link/Dwarf.zig` `getQualifiedEntry` (dirty, preserved) | yes — three former inline sites now reference the shared entry | **I-C6** (the `const signature collision` string is present in that binary) — **not in P-D6** | yes | **yes** | **520 duplicate DIEs removed, 7,723 bytes = 0.35%** on the two-module scale probe. `llvm-dwarfdump --verify`: 120 errors before, 120 after, **error sets identical** (pre-existing). All 2,515 distinct named type descriptions present before and after. `gdb` reads the qualifier correctly through the shared DIE. **Negative control seen red:** bypassing the shared entry in `finishForwardToConst` **aborts** the compiler — `index out of bounds: index 40, len 19` at `src/link/Elf/ZigObject.zig:633`; restored and verified with `sha256sum -c`. **Standing limit, restated: this has NO effect on the consuming project's build** — that build goes through LLVM + LLD, not `src/link/Dwarf.zig` (`CGM_ACTUAL_BACKEND.md`). |
 | G3 | **Cross-process constant-type signature** | yes — a primitive for 2b | yes — `src/link/ConstPool.zig` (dirty, preserved) | yes — `--debug-log const_pool` on a `-Dlog` build | **I-C6** | yes — oracle **5/5**, shared signature `0xd0a652b0234af326` derived by two separate processes | **yes** | Element-width/length and target controls proven distinct. **Collision refusal proven red then green:** the layout-only draft fired in production — `const signature collision: 0x49823ab0dc97fa51 claimed by types 10 and 16` (`u64_type` vs `usize_type`) — and the key-based fix silences it. **Absent and refused by name:** pointers, sentinel arrays, containers, functions, error sets. **Emission is byte-identical** — the signature changes what the compiler knows, not what it writes; no reduction is claimed for it. |
-| G4 | **Whole-compilation debug identity** — real `DW_AT_GNU_dwo_id` fed from `Builder.dwo_id` (stage 2a's opening) | yes | yes — `src/codegen/llvm.zig:789` `debugContentIdentity`; `lib/std/zig/llvm/Builder.zig:24` `dwo_id`; `lib/std/zig/llvm/ir.zig:1657` (frozen literal → real operand) | yes — `src/codegen/llvm.zig:911`, after `flushTypePool` and both `resolveDebugForwardReference` calls | **I-C6** — **but the five `cgm-dwoid` trace sites are NOT** (`strings … | grep -c cgm-dwoid` = **0** on that binary) | yes | **partial — see the gap** | **PASSED on I-C6:** repeated ReleaseSafe equality, consumer 1 `0x42ccd13bb162ca8e` ×3 and consumer 2 `0x61d78abd44beec1f` ×3. ABI (gnu→musl), arch (x86_64→aarch64), optimize (ReleaseSafe→ReleaseFast) and content (non-root module `scale_modb.zig`) all **DISTINCT**, and **restore returns to baseline** — that is a red→green content control. `gdb` lines/types/locals read on both consumers. `DW_AT_GNU_dwo_name` count = **0** in all six artifacts; `find -name '*.dwo'` = 0 — nothing points at an absent split file. **THE GAP: numeric completeness of the admitted input set is NOT proven.** Establishing it requires the trace sites to be in a rebuilt binary, and they are in no binary. The hard-coded "expect 299" is **withdrawn**; the expected set must be derived from the fold and compared as two set differences. |
+| G4 | **Whole-compilation debug identity** — real `DW_AT_GNU_dwo_id` fed from `Builder.dwo_id` (stage 2a's opening) | yes | yes — `src/codegen/llvm.zig:789` `debugContentIdentity`; `lib/std/zig/llvm/Builder.zig:24` `dwo_id`; `lib/std/zig/llvm/ir.zig:1657` (frozen literal → real operand) | yes — `src/codegen/llvm.zig:911`, after `flushTypePool` and both `resolveDebugForwardReference` calls | **I-C6**, and the five `cgm-dwoid` trace sites are now in **I-AB** (`strings … | grep -c cgm-dwoid` = 1 there, **0** on I-C6) | yes | **yes** | **PASSED on I-C6:** repeated ReleaseSafe equality, consumer 1 `0x42ccd13bb162ca8e` ×3 and consumer 2 `0x61d78abd44beec1f` ×3. ABI (gnu→musl), arch (x86_64→aarch64), optimize (ReleaseSafe→ReleaseFast) and content (non-root module `scale_modb.zig`) all **DISTINCT**, and **restore returns to baseline** — that is a red→green content control. `gdb` lines/types/locals read on both consumers. `DW_AT_GNU_dwo_name` count = **0** in all six artifacts; `find -name '*.dwo'` = 0 — nothing points at an absent split file. **GAP CLOSED 2026-09-10 on I-AB** — see [the completeness receipt](DWOID_COMPLETENESS_2026-09-10.md). Artifact set and folded set are **exactly equal in both directions on both consumers**: consumer 1 `root` 85 = 85, consumer 2 `consumer2` 84 = 84, **artifact-only 0, map-only 0**. The comparator's own detector was proven to fire (`--drop-path` → artifact-only exactly 1). Inclusion control seen **red then green** on the compiler's own per-file digest (`0x7e88a85c…` → `0x370678e5…` → back; identity `0x42ccd13b…` → `0xea4b8d72…` → back; fixtures 7/7 OK). Identity equal with and without `--debug-log`. And new: both identities **reproduce across two different compiler builds**, so the value is a property of the input program, not of the binary. **Still not covered:** a file reaching debug info without `getDebugFile` (cross-module inlining / `inlinedAt`); that fixture is not authored. |
 | G5 | **`.dwo` emit stream / split-DWARF packaging** | yes — the mechanism 2b would reference | **no** | no | **none** | no | no | A grep over `src/` for `split_dwarf｜SplitDwarf｜gsplit-dwarf｜.dwo｜dwo_name｜DwoId｜debuglink｜separate.debug` returns **0 hits** (only unrelated `.dword` operand names). Declared debug options are `-fstrip`, `-gdwarf32`, `-gdwarf64` (`src/main.zig:1689-1695`); `EmitOptions` (`src/codegen/llvm/bindings.zig:88`) has **no** split-debug member. `splitDebugFilename` was deliberately **not** set: an `llc-21` probe measured that setting it emits `DW_AT_GNU_dwo_name("a.dwo")` with **no** `.dwo` sections — a dangling reference, exactly the debugger breakage this must not introduce. |
 
 ### Group H — analysis-reuse ledger (stage 2a)
@@ -113,9 +114,12 @@ compiler change at HEAD is inside **P-D6**. The five dirty owners are not.
 ## What the ledger shows, stated plainly
 
 **Fully proven (a control was seen red and came back green on a rebuilt binary):
-C8, D1, D2, D3, E2, G2, G3.** Seven rows. Every one of them is a robustness,
-correctness or intra-emitter result — none of them is the requested
-debug-sharing, hyper-modular-cache or residency behaviour.
+C8, D1, D2, D3, E2, G2, G3 — and, since 2026-09-10, G4.** Eight rows. Every one
+of them is a robustness, correctness, intra-emitter or attribution result — none
+of them is the requested debug-sharing, hyper-modular-cache or residency
+behaviour. G4 is the closest: it proves the identity's input coverage exactly,
+which is the key a sharing mechanism would use, and the sharing mechanism (G1)
+still does not exist.
 
 **Compiled and exercised but never negative-controlled: A1, A3, B1, C1, C3, C4,
 C6, C7, E1.** Nine rows. Four prepared sabotage patches — **V3, V14, V-S2a,
@@ -127,10 +131,11 @@ four are the cheapest outstanding proof debt in the repository.
 +6.59%). The ready index has four genuine red→green controls, and it is still
 switched off because the feature it accelerates is slower than the default.
 
-**Authored, never compiled: the five `cgm-dwoid` trace sites** in
-`src/codegen/llvm.zig`. `ast-check` exit 0 is AstGen only — it proves syntax, not
-that a `log.debug` format string matches its argument types. That is the single
-largest risk in the current dirty tree and it is discharged only by a rebuild.
+**~~Authored, never compiled: the five `cgm-dwoid` trace sites~~ — DISCHARGED
+2026-09-10.** The risk was real and is now retired the only way it could be: the
+sites are compiled into `I-AB` (`ab62ba33…`, exit 0) and were exercised, which
+`ast-check` alone could never establish, since AstGen proves syntax and not that
+a `log.debug` format string matches its argument types.
 
 **Not authored at all: A2, A4, F1, F2, G1, G5, H1.** Seven rows — and they
 include **the enhancement Daniel actually asked for.** Stage 2b (G1) is not

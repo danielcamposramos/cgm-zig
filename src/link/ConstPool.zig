@@ -20,6 +20,14 @@ pending: std.ArrayList(Index),
 complete_containers: std.AutoArrayHashMapUnmanaged(InternPool.Index, void),
 container_deps: std.AutoArrayHashMapUnmanaged(InternPool.Index, ContainerDepEntry.Index),
 container_dep_entries: std.ArrayList(ContainerDepEntry),
+/// Parallel to `values`: the CROSS-PROCESS content signature of each pooled
+/// constant's type. Dense, same index space as `Index`, appended in `get`.
+signatures: std.ArrayList(Signature),
+/// Reverse index over complete signatures: signature -> the TYPE that produced
+/// it, for the collision refusal in `recordSignature`. Keyed by type, NOT by
+/// pool slot: `values` is keyed by VALUE, so `@as(u32, 1)` and `@as(u32, 2)`
+/// are two pool entries that legitimately share one type signature.
+signature_owners: std.AutoHashMapUnmanaged(u64, InternPool.Index),
 
 pub const empty: ConstPool = .{
     .values = .empty,
@@ -27,6 +35,8 @@ pub const empty: ConstPool = .{
     .complete_containers = .empty,
     .container_deps = .empty,
     .container_dep_entries = .empty,
+    .signatures = .empty,
+    .signature_owners = .empty,
 };
 
 pub fn deinit(pool: *ConstPool, gpa: Allocator) void {
@@ -35,7 +45,40 @@ pub fn deinit(pool: *ConstPool, gpa: Allocator) void {
     pool.complete_containers.deinit(gpa);
     pool.container_deps.deinit(gpa);
     pool.container_dep_entries.deinit(gpa);
+    pool.signatures.deinit(gpa);
+    pool.signature_owners.deinit(gpa);
 }
+
+/// A signature that identifies a pooled constant's type by RESOLVED STRUCTURE,
+/// so that two SEPARATE compiler processes derive the same value for the same
+/// type. This is the identity the project-wide debug-sharing work needs and
+/// which no existing key provides: `InternPool.Index` is `{tid, local_offset}`
+/// over a worker-thread partition, `*Package.Module` is arena pointer identity,
+/// and `Compilation.Path.digest()` hashes the PATH, not the content.
+///
+/// It signs NOTHING it cannot derive. Every non-derivable case is a NAMED
+/// refusal rather than a hash of a placeholder, because a signature that
+/// silently covered an unresolved layout would license sharing debug entries
+/// between types that are not the same type.
+pub const Signature = union(enum) {
+    refused: Refusal,
+    /// Valid across separate compiler processes for the same compiler version
+    /// and target.
+    complete: u64,
+
+    pub const Refusal = enum {
+        /// The type's layout is not resolved yet, so it has no stable structure.
+        layout_unresolved,
+        /// This kind's cross-process structure is not derivable by this
+        /// increment. Containers, functions, error sets and pointers-to-those
+        /// need declaration-site identity, which is the NEXT increment.
+        kind_not_yet_derivable,
+    };
+};
+
+/// Depth bound for the structural walk. A type that nests deeper than this
+/// refuses by name rather than recursing without a bound.
+const max_signature_depth: u8 = 16;
 
 pub const Index = enum(u32) {
     _,
@@ -154,8 +197,13 @@ pub fn get(pool: *ConstPool, pt: Zcu.PerThread, user: User, val: InternPool.Inde
             .type_type => if (ip.isUndef(val)) .type else .fromInterned(val),
             else => |ty| .fromInterned(ty),
         };
+        // Reserve the parallel signature slot BEFORE anything that can re-enter
+        // `get` (a container's field types reach back through the user), so
+        // `signatures` stays index-aligned with `values`.
+        try pool.signatures.append(gpa, .{ .refused = .layout_unresolved });
         try pool.registerTypeDeps(index, ty, zcu);
         try pool.pending.append(gpa, index);
+        try pool.recordSignature(zcu, index, ty);
         try user.addConst(pt, index, val);
     }
     return index;
@@ -175,11 +223,110 @@ fn update(pool: *ConstPool, pt: Zcu.PerThread, user: User, index: ConstPool.Inde
         else => |ty| .fromInterned(ty),
     };
     if (pool.checkType(ty, zcu)) {
+        // The layout that was unresolved at `get` time may be resolved now, so
+        // a signature refused as `layout_unresolved` can become derivable here.
+        try pool.recordSignature(zcu, index, ty);
         try user.updateConst(pt, index, val);
     } else {
         try user.updateConstIncomplete(pt, index, val);
     }
 }
+
+/// Compute and store the cross-process signature for `index`, refusing by name
+/// when it is not derivable and REFUSING LOUDLY on collision. A signature is a
+/// claim about a TYPE; since the intern pool already deduplicates types, two
+/// DISTINCT type indices sharing one signature is a defect in the hash, not a
+/// legitimate merge. Many pool slots sharing one signature is expected.
+fn recordSignature(pool: *ConstPool, zcu: *const Zcu, index: Index, ty: Type) Allocator.Error!void {
+    const gpa = zcu.comp.gpa;
+    const sig = pool.signatureOf(zcu, ty);
+    pool.signatures.items[@intFromEnum(index)] = sig;
+    switch (sig) {
+        .refused => |why| log.debug("const signature REFUSED ({t}) for pool index {d}", .{
+            why, @intFromEnum(index),
+        }),
+        .complete => |hash| {
+            const ty_ip = ty.toIntern();
+            const gop = try pool.signature_owners.getOrPut(gpa, hash);
+            if (gop.found_existing and gop.value_ptr.* != ty_ip) {
+                std.debug.panic(
+                    "const signature collision: 0x{x:0>16} claimed by types {d} and {d}",
+                    .{ hash, @intFromEnum(gop.value_ptr.*), @intFromEnum(ty_ip) },
+                );
+            }
+            gop.value_ptr.* = ty_ip;
+            log.debug("const signature 0x{x:0>16} pool index {d} type {d}", .{
+                hash, @intFromEnum(index), @intFromEnum(ty_ip),
+            });
+        },
+    }
+}
+
+/// The cross-process signature of `ty`, or a named refusal.
+fn signatureOf(pool: *const ConstPool, zcu: *const Zcu, ty: Type) Signature {
+    if (!pool.checkType(ty, zcu)) return .{ .refused = .layout_unresolved };
+    const target = &zcu.comp.root_mod.resolved_target.result;
+    var hasher: std.hash.Wyhash = .init(0);
+    // Two compiler versions, or two targets, are two different debug worlds.
+    // A signature blind to them would license sharing between entries whose
+    // layout or encoding genuinely differs.
+    hasher.update(@import("build_options").version);
+    std.hash.autoHash(&hasher, target.cpu.arch);
+    std.hash.autoHash(&hasher, target.os.tag);
+    std.hash.autoHash(&hasher, target.abi);
+    std.hash.autoHash(&hasher, target.ofmt);
+    if (!hashType(&hasher, ty, zcu, 0)) return .{ .refused = .kind_not_yet_derivable };
+    return .{ .complete = hasher.final() };
+}
+
+/// Fold the DECLARED KEY of `ty` into `hasher`. Returns false — hashing nothing
+/// further — when this kind's cross-process identity is not derivable from the
+/// key alone.
+///
+/// It reads the intern pool's own key rather than restating derived layout,
+/// because layout is NOT the identity a debug entry carries. `usize` and `u64`
+/// have identical layout on x86_64 and are separate entries with separate
+/// names; the pool already distinguishes them as `.simple_type` versus
+/// `.int_type`, and the simple-type ordinals are compile-time constants, so
+/// that distinction is stable across processes. This was not a design
+/// preference: the collision refusal below caught the layout-only version
+/// equating those two on the first fixture run.
+fn hashType(hasher: *std.hash.Wyhash, ty: Type, zcu: *const Zcu, depth: u8) bool {
+    if (depth > max_signature_depth) return false;
+    const ip = &zcu.intern_pool;
+    const key = ip.indexToKey(ty.toIntern());
+    std.hash.autoHash(hasher, @as(std.meta.Tag(InternPool.Key), key));
+    switch (key) {
+        // A named scalar IS its name. Ordinals are compile-time, so stable.
+        .simple_type => |simple| {
+            std.hash.autoHash(hasher, @intFromEnum(simple));
+            return true;
+        },
+        .int_type => |int| {
+            std.hash.autoHash(hasher, int.signedness);
+            std.hash.autoHash(hasher, int.bits);
+            return true;
+        },
+        .array_type => |array| {
+            // A sentinel is part of the type but its VALUE is an intern index,
+            // which is thread-partitioned and not comparable across processes.
+            if (array.sentinel != .none) return false;
+            std.hash.autoHash(hasher, array.len);
+            return hashType(hasher, .fromInterned(array.child), zcu, depth + 1);
+        },
+        .vector_type => |vector| {
+            std.hash.autoHash(hasher, vector.len);
+            return hashType(hasher, .fromInterned(vector.child), zcu, depth + 1);
+        },
+        .opt_type => |child| return hashType(hasher, .fromInterned(child), zcu, depth + 1),
+        // Pointers, containers, functions and error sets need their full key
+        // folded (a pointer's constness, alignment, address space and sentinel
+        // all change the emitted entry) or declaration-site identity, which
+        // this increment does not derive. Named, never silently hashed.
+        else => return false,
+    }
+}
+
 fn checkType(pool: *const ConstPool, ty: Type, zcu: *const Zcu) bool {
     if (ty.isGenericPoison()) return true;
     return switch (ty.zigTypeTag(zcu)) {
@@ -282,6 +429,8 @@ fn registerTypeDeps(pool: *ConstPool, root: Index, ty: Type, zcu: *const Zcu) Al
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+/// Observable with `--debug-log const_pool` on a compiler built with `-Dlog`.
+const log = std.log.scoped(.const_pool);
 
 const InternPool = @import("../InternPool.zig");
 const Type = @import("../Type.zig");

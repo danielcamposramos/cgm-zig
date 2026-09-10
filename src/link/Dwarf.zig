@@ -26,6 +26,13 @@ endian: std.builtin.Endian,
 address_size: AddressSize,
 
 const_pool: link.ConstPool,
+/// Shared entries for qualifier DIEs (`const_type` / `volatile_type`), keyed by
+/// the entry they qualify. `*const T`, `[*]const T`, `[*:0]const T` and
+/// `?*const T` all need `const_type -> T`; emitting one per pointer type is
+/// pure duplication (measured: 522 redundant `DW_TAG_const_type` DIEs of 866 in
+/// a single object). Entries here are never freed, and they key off `ConstPool`
+/// entries, which are themselves never removed, so the mapping stays valid.
+qualified_types: std.AutoHashMapUnmanaged(QualifiedKey, QualifiedEntry),
 
 mods: std.AutoArrayHashMapUnmanaged(*Module, ModInfo),
 /// Indices are `link.ConstPool.Index`.
@@ -2104,6 +2111,19 @@ pub const WipNav = struct {
         reloc.target_off = @intCast(wip_nav.debug_info.writer.end);
     }
 
+    /// Resolve a reserved forward reference to the SHARED `const_type` entry
+    /// for `ty`, instead of to an inline DIE this entry would otherwise emit.
+    /// The reserved slot is a `cross_entry_reloc`, so the shared entry is
+    /// created in this WipNav's own unit.
+    fn finishForwardToConst(wip_nav: *WipNav, reloc_index: u32, ty: Type) UpdateError!void {
+        const dwarf = wip_nav.dwarf;
+        const ty_unit, const ty_entry = try wip_nav.getValueEntry(ty.toValue());
+        const qual = try dwarf.getQualifiedEntry(.@"const", wip_nav.unit, ty_unit, ty_entry);
+        const reloc = &dwarf.debug_info.section.getUnit(wip_nav.unit).getEntry(wip_nav.entry).cross_entry_relocs.items[reloc_index];
+        reloc.target_entry = qual.entry.toOptional();
+        reloc.target_off = 0;
+    }
+
     fn blockValue(
         wip_nav: *WipNav,
         src_loc: Zcu.LazySrcLoc,
@@ -2318,6 +2338,7 @@ pub fn init(lf: *link.File, format: DW.Format) Dwarf {
         .endian = target.cpu.arch.endian(),
 
         .const_pool = .empty,
+        .qualified_types = .empty,
 
         .mods = .empty,
         .values = .empty,
@@ -2491,6 +2512,7 @@ pub fn initMetadata(dwarf: *Dwarf) UpdateError!void {
 pub fn deinit(dwarf: *Dwarf) void {
     const gpa = dwarf.gpa;
     dwarf.const_pool.deinit(gpa);
+    dwarf.qualified_types.deinit(gpa);
     for (dwarf.mods.values()) |*mod_info| mod_info.deinit(gpa);
     dwarf.mods.deinit(gpa);
     dwarf.values.deinit(gpa);
@@ -2848,9 +2870,7 @@ fn initWipNavInner(
                     try diw.writeUleb128(nav.resolved.?.@"align".toByteUnits() orelse
                         ty.abiAlignment(zcu).toByteUnits().?);
                     try diw.writeByte(@intFromBool(decl.linkage != .normal));
-                    wip_nav.finishForward(const_ty_reloc_index);
-                    try wip_nav.abbrevCode(.is_const);
-                    try wip_nav.refType(ty);
+                    try wip_nav.finishForwardToConst(const_ty_reloc_index, ty);
                 },
                 .@"var" => {
                     try wip_nav.refType(ty);
@@ -3243,9 +3263,7 @@ fn updateComptimeNavInner(dwarf: *Dwarf, pt: Zcu.PerThread, nav_index: InternPoo
             try diw.writeByte(@intFromBool(decl.linkage != .normal));
             if (has_runtime_bits) try wip_nav.blockValue(nav_src_loc, nav_val);
             if (has_comptime_state) try wip_nav.refValue(nav_val);
-            wip_nav.finishForward(nav_ty_reloc_index);
-            try wip_nav.abbrevCode(.is_const);
-            try wip_nav.refType(nav_ty);
+            try wip_nav.finishForwardToConst(nav_ty_reloc_index, nav_ty);
         },
         .func => |func_ty| {
             const func_type = ip.indexToKey(func_ty.toIntern()).func_type;
@@ -3591,25 +3609,19 @@ fn updateConstInner(dwarf: *Dwarf, pt: Zcu.PerThread, debug_const_index: link.Co
                 if (ptr_type.sentinel != .none) try wip_nav.blockValue(src_loc, .fromInterned(ptr_type.sentinel));
                 if (ptr_type.flags.alignment.toByteUnits()) |a| try diw.writeUleb128(a);
                 try diw.writeByte(@intFromEnum(ptr_type.flags.address_space));
-                if (ptr_type.flags.is_const or ptr_type.flags.is_volatile) try wip_nav.infoSectionOffset(
-                    .debug_info,
-                    wip_nav.unit,
-                    wip_nav.entry,
-                    @intCast(diw.end + dwarf.sectionOffsetBytes()),
-                ) else try wip_nav.refType(ptr_child_type);
-                if (ptr_type.flags.is_const) {
-                    try wip_nav.abbrevCode(.is_const);
-                    if (ptr_type.flags.is_volatile) try wip_nav.infoSectionOffset(
-                        .debug_info,
-                        wip_nav.unit,
-                        wip_nav.entry,
-                        @intCast(diw.end + dwarf.sectionOffsetBytes()),
-                    ) else try wip_nav.refType(ptr_child_type);
-                }
-                if (ptr_type.flags.is_volatile) {
-                    try wip_nav.abbrevCode(.is_volatile);
-                    try wip_nav.refType(ptr_child_type);
-                }
+                if (ptr_type.flags.is_const or ptr_type.flags.is_volatile) {
+                    // Point at the SHARED qualifier DIE rather than emitting a
+                    // fresh `const_type`/`volatile_type` inline for every
+                    // pointer type that happens to qualify the same child.
+                    const child_unit, const child_entry =
+                        try wip_nav.getValueEntry(ptr_child_type.toValue());
+                    var qual: QualifiedEntry = .{ .unit = child_unit, .entry = child_entry };
+                    if (ptr_type.flags.is_volatile)
+                        qual = try dwarf.getQualifiedEntry(.@"volatile", .main, qual.unit, qual.entry);
+                    if (ptr_type.flags.is_const)
+                        qual = try dwarf.getQualifiedEntry(.@"const", .main, qual.unit, qual.entry);
+                    try wip_nav.infoSectionOffset(.debug_info, qual.unit, qual.entry, 0);
+                } else try wip_nav.refType(ptr_child_type);
             },
             .slice => {
                 try wip_nav.abbrevCode(.generated_struct_type);
@@ -6395,6 +6407,69 @@ fn addCommonEntry(dwarf: *Dwarf, unit: Unit.Index) UpdateError!Entry.Index {
     assert(try dwarf.debug_loclists.section.getUnit(unit).addEntry(dwarf.gpa) == entry);
     assert(try dwarf.debug_rnglists.section.getUnit(unit).addEntry(dwarf.gpa) == entry);
     return entry;
+}
+
+const QualifiedKey = struct {
+    in_unit: Unit.Index,
+    unit: Unit.Index,
+    entry: Entry.Index,
+    kind: Kind,
+    const Kind = enum { @"const", @"volatile" };
+};
+const QualifiedEntry = struct { unit: Unit.Index, entry: Entry.Index };
+
+/// Return the single shared entry holding `<kind>_type -> (target_unit,
+/// target_entry)`, creating it on first use. This is the consumer that turns
+/// the measured qualifier duplication into one DIE per qualified type.
+fn getQualifiedEntry(
+    dwarf: *Dwarf,
+    kind: QualifiedKey.Kind,
+    in_unit: Unit.Index,
+    target_unit: Unit.Index,
+    target_entry: Entry.Index,
+) (UpdateError || Writer.Error)!QualifiedEntry {
+    const gpa = dwarf.gpa;
+    const gop = try dwarf.qualified_types.getOrPut(gpa, .{
+        .in_unit = in_unit,
+        .unit = target_unit,
+        .entry = target_entry,
+        .kind = kind,
+    });
+    if (gop.found_existing) return gop.value_ptr.*;
+    errdefer _ = dwarf.qualified_types.remove(gop.key_ptr.*);
+
+    const unit: Unit.Index = in_unit;
+    const entry = try dwarf.addCommonEntry(unit);
+    gop.value_ptr.* = .{ .unit = unit, .entry = entry };
+
+    const abbrev_code = try dwarf.refAbbrevCode(switch (kind) {
+        .@"const" => .is_const,
+        .@"volatile" => .is_volatile,
+    });
+    var aw: Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    const w = &aw.writer;
+    try w.writeUleb128(abbrev_code);
+
+    // The DIE body is a single `DW_AT_type` reference, written as zeroes and
+    // patched by the relocation appended here --- the same dispatch
+    // `WipNav.sectionOffset` uses, since this entry is in `.debug_info` too.
+    const entry_ptr = dwarf.debug_info.section.getUnit(unit).getEntry(entry);
+    const source_off: u32 = @intCast(w.end);
+    if (target_unit != unit) try entry_ptr.cross_unit_relocs.append(gpa, .{
+        .source_off = source_off,
+        .target_unit = target_unit,
+        .target_entry = target_entry.toOptional(),
+        .target_off = 0,
+    }) else try entry_ptr.cross_entry_relocs.append(gpa, .{
+        .source_off = source_off,
+        .target_entry = target_entry.toOptional(),
+        .target_off = 0,
+    });
+    try w.splatByteAll(0, dwarf.sectionOffsetBytes());
+
+    try dwarf.debug_info.section.replaceEntry(unit, entry, dwarf, aw.written());
+    return gop.value_ptr.*;
 }
 
 fn freeCommonEntry(

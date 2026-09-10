@@ -1639,7 +1639,7 @@ pub const ModuleBlock = struct {
                 .{ .literal = 0 }, // subprograms
                 MetadataAbbrev, // globals
                 .{ .literal = 0 }, // imported entities
-                .{ .literal = 0 }, // DWO ID
+                .{ .vbr = 6 }, // DWO ID
                 .{ .literal = 0 }, // macros
                 .{ .literal = 0 }, // split debug inlining
                 .{ .literal = 0 }, // debug info profiling
@@ -1654,6 +1654,7 @@ pub const ModuleBlock = struct {
             is_optimized: bool,
             enums: Builder.Metadata.Optional,
             globals: Builder.Metadata.Optional,
+            dwo_id: u64,
         };
 
         pub const Subprogram = struct {

@@ -6,6 +6,32 @@ Campos Ramos. This is the staged design for the fork's flagship feature: attacki
 
 ## Current-state note — 2026-09-06
 
+### Explicit scope correction — 2026-09-08
+
+The requested **one shared debug artifact across a project's compilation
+units/build sweep is NOT implemented in the promoted compiler**. This is stage
+2b below, not a capability established by compiler promotion or ready-index
+acceptance. Any earlier broad completion interpretation must be corrected.
+
+Read-only source/promotion audit: the promoted source is `0399d2b19b` and its
+executable SHA-256 is
+`d6b4168f368b95e83d2a6af8022e6ac19e41efbe9b3b04f664c0333ebfa5e34f`.
+From the verbatim upstream import `754b7a3872`, `git diff` shows no changes in
+`src/link/` or `src/codegen/llvm.zig`. The `Dwarf.zig`, `ConstPool.zig`, and LLVM
+codegen blobs are unchanged. Existing type/debug pools reuse entries within
+one output/compilation; they are not a shared store across separate product
+and test compiler invocations. Module units alone do not mean every type is
+blindly duplicated per module, either: that earlier shorthand was too broad.
+
+The next work remains the existing stage 2a attribution and stage 2b sharing
+contracts, preserving context-sensitive identities and debugger behavior.
+Compression after emission is not deduplication before emission. No new
+debug-sharing implementation, fixture, build-footprint reduction, or release
+is claimed by this documentation correction.
+
+Produced by GPT 6 Astra through Codex, with an independent compiler-source
+review by the cooperating GPT 6 Astra partner; 2026-09-08.
+
 The stage table below preserves the original design sequence, not today's
 implementation status. Module-graph emission, import-aware AstGen and batch
 AstGen subsequently landed; their individual capabilities and evidence are

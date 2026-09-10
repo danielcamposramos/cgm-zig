@@ -18,6 +18,10 @@ strip: bool,
 
 source_filename: String,
 data_layout: String,
+/// Content identity of this module's debug information, emitted as the compile
+/// unit's `DW_AT_GNU_dwo_id`. Zero means NO identity is claimed --- the field is
+/// left at the DWARF default rather than carrying a value that might be wrong.
+dwo_id: u64 = 0,
 target_triple: String,
 module_asm: std.ArrayList(u8),
 
@@ -14293,6 +14297,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                             },
                             .enums = extra.enums,
                             .globals = extra.globals,
+                            .dwo_id = self.dwo_id,
                         }, metadata_adapter);
                     },
                     .subprogram,
