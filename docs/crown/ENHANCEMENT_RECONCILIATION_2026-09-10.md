@@ -154,21 +154,85 @@ sharing mechanism would use, and the sharing mechanism does not exist.
    `I-C6`. The document is preserved unedited as history in this packet and is
    corrected here; the edit belongs in the same commit as the G4 completeness
    work, not before it.
-2. **Two comments in `debugContentIdentity` cite those voided numbers**
-   (`src/codegen/llvm.zig:800-807` "ordering by that index gave ONE program two
-   DIFFERENT identities"; `:832-837` "293 files both runs … Debug was stable
-   3/3"). They are in the dirty tree and must be corrected — packet 2, item 7.
+2. **Three comments in `src/codegen/llvm.zig` cited voided or miscounted
+   numbers. All three are now corrected**, and each retired claim is quoted in
+   place beside the reason it was retired (doctrine principle 7) rather than
+   deleted: the `File.Index` ordering claim, the `Zir.Inst.Data` bare-union
+   claim with its "293 files both runs / Debug stable 3/3", and the call-site
+   comment's "85 admitted vs 293/299 referenced". Each surviving justification
+   is now STRUCTURAL (an index encoding, a language rule, an ordering
+   dependency) and cites no measurement. The edits are provably comment-only:
+   `sha256` of the file with every `//` line removed is
+   `d30ce263e767ca37969b2e8553b1d4ed6bc86423226b889f01b81b3bf81b981d` before and
+   after all three. File `sha256` went `a94195a1…` → `fc89aa7c…`.
 3. **`CROSS_PROCESS_SIGNATURE.md` names the instrumented compiler as
    `0.16.0+cgm.289ff31b24-crownsig`.** `I-C6` reports `0.16.0` — it was built
    with `-Dversion-string=0.16.0`. Those are two different builds; the
    emission-identical table in that document was measured against the earlier
    one, not against `I-C6`. Neither result is withdrawn; the binary attribution
    is.
-4. **The 2026-08-23 V-table was run against `P046`, not `P-D6`.** No V row has
+4. **The recorded producer command cannot produce a traceable compiler: it omits
+   `-Dlog`.** `HANDOFF_compiler_lane_opus_2026_09_08.md` §"Latest REAL result"
+   records the exact `zig2 build` line, and `-Dlog` is not in it. `-Dlog` is a
+   distinct option from `-Ddebug-extensions` (`build.zig:250-251`) and defaults
+   to `is_debug`, i.e. **false** at ReleaseSafe. Confirmed on `I-C6` itself,
+   which refuses by name: `warning: Zig was compiled without logging enabled
+   (-Dlog). --debug-log has no effect.` Any packet step that reads
+   `--debug-log codegen` output must add `-Dlog` to that command. A corollary:
+   `CROSS_PROCESS_SIGNATURE.md`'s reproduce block requires "a compiler built
+   with `-Dlog`", so the const-signature oracle's 5/5 did **not** run against
+   `I-C6`; it ran against one of the earlier `-Dlog` builds in the evidence root.
+5. **The recorded producer command also omits `ZIG_LIBC`, and fails without it.**
+   Re-fired 2026-09-10: the build reached `install zig` and died with `error:
+   sub-compilation of libunwind failed` / `'asm/types.h' file not found` after
+   1,008 s. This is the gotcha `docs/crown/BUILDING.md` §2 already documents:
+   `zig libc` reports `sys_include_dir=/usr/include`, but on this Debian
+   multiarch station `/usr/include/asm` **does not exist** and the header lives
+   at `/usr/include/x86_64-linux-gnu/asm/types.h`. BUILDING.md's own negative
+   control was re-fired today **on the promoted, unpatched compiler**, so the
+   cause cannot be attributed to any patch: `zig build-exe t.zig -lc -lunwind`
+   → rc=1 with that error; the same command under the corrected `ZIG_LIBC` →
+   rc=0, 10,010,424-byte binary produced. The producer command in the handoff
+   is therefore incomplete twice over, and the record should carry the
+   environment alongside the arguments.
+6. **The "85 admitted vs 293/299 referenced" gap does not exist — it is a
+   cross-compile-unit count.** This was the stated justification for moving the
+   identity computation later. Re-measured per compile unit on the artifact the
+   figures came from (`R9_c1_1`, produced by `I-C6`):
+
+   | compile unit | `DW_AT_decl_file` | line-table | union |
+   |---|---|---|---|
+   | `root` (the program) | 85 | 85 | **85** |
+   | `compiler_rt` (a separate compilation) | 220 | 220 | 220 |
+   | whole binary, distinct | 299 | 299 | 299 |
+
+   85 + 220 − 6 shared paths = 299. `DW_AT_decl_file` is a per-CU index into
+   that CU's own `file_names`, so rendering paths across CUs and deduplicating
+   them mixes two index spaces. The program unit's file set is **exactly the 85
+   that were admitted**. The "293 line-table files" figure does not reproduce at
+   all: the whole-binary distinct line-table path count is 299. **What this does
+   NOT establish:** anything about what the *earlier* call site admitted — the
+   code no longer computes there, so that is unmeasurable from this tree. The
+   later position stands on the structural ordering argument (`flushTypePool`
+   admits further files through `getDebugFile`), not on the retired figures.
+   The in-code comment has been corrected accordingly.
+7. **The 2026-08-23 V-table was run against `P046`, not `P-D6`.** No V row has
    been re-run against today's station default. The rows remain valid evidence
    for the code they exercised — `git diff 0399d2b19b HEAD -- src/ lib/` is
    empty, and the `b991cb16 → 0399d2b19b` range added the ready index — but
    "GREEN on the promoted binary" is only literally true of `P046`.
+
+8. **This repository's own two records disagree on two published figures.**
+   V8's magnitude: **+6.59%** in the README difference table versus **+11.92%**
+   in `PROMOTED/RECORD.md:143`. V15's parked-sample figure: **"0 of 881"**
+   thread-samples in the README versus **"0.16% of ~1,254"** in
+   `PROMOTED/RECORD.md:147` — and 0.16% of 1,254 is about two samples, not zero.
+   Both rows keep the same sign and the same disposition in both documents
+   (V8 RED, the feature ships OFF; V15's proposed admission gate retired), so no
+   row in this ledger turns on them, and the C5/C8 rows above are written to
+   survive either value. But a number published twice with two values is a drift
+   with a delay fuse. **Recorded, not resolved** — neither figure should be
+   quoted again until one is re-derived from the harness output.
 
 ## What this ledger does not claim
 
