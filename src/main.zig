@@ -23,6 +23,7 @@ const Server = std.zig.Server;
 
 pub const tracy = @import("tracy.zig");
 const Compilation = @import("Compilation.zig");
+const ModuleLedger = @import("ModuleLedger.zig");
 const link = @import("link.zig");
 const Package = @import("Package.zig");
 const build_options = @import("build_options");
@@ -538,6 +539,8 @@ const usage_build_generic =
     \\  -municode                 (Windows) Use wmain/wWinMain as entry point
     \\  --time-report             Send timing diagnostics to '--listen' clients
     \\  --time-report-json [path] Write the same timing stats to [path] as JSON.
+    \\  --module-ledger [path]   Write per-module analysis attribution to [path] as JSON
+    \\                           (crown stage 2a; read-only accounting, requires timing data)
     \\                            Implies --time-report and needs no --listen.
     \\
     \\Per-Module Compile Options:
@@ -898,6 +901,9 @@ fn buildOutputType(
     // `--time-report-json <path>`: the same numbers `--time-report` sends to a `--listen`
     // client, written to a file as JSON instead. See the flag's parse site for why.
     var time_report_json: ?[]const u8 = null;
+    // Crown stage 2a. Rolls up the per-declaration attribution the time report
+    // already collects; adds no counter to any hot path.
+    var module_ledger_json: ?[]const u8 = null;
     var stack_report = false;
     var show_builtin = false;
     var emit_bin: EmitBin = .yes_default_path;
@@ -1504,6 +1510,13 @@ fn buildOutputType(
                         // transport. `--listen` behaviour is untouched, and a stock
                         // invocation that never passes this flag is byte-identical.
                         time_report_json = args_iter.nextOrFatal();
+                        time_report = true;
+                    } else if (mem.eql(u8, arg, "--module-ledger")) {
+                        // Crown stage 2a. Like the flag above this is transport
+                        // only: it rolls up attribution the time report already
+                        // collects, so it forces `time_report` for the same
+                        // reason and adds no counter anywhere.
+                        module_ledger_json = args_iter.nextOrFatal();
                         time_report = true;
                     } else if (mem.eql(u8, arg, "--test-execve")) {
                         test_execve = true;
@@ -3139,12 +3152,18 @@ fn buildOutputType(
         fatal("test-obj requires --test-no-exec", .{});
     }
 
-    // `--time-report` still requires a sink; there are now two of them. Without `--listen`
-    // the IPC sink does not exist, so the refusal stands -- unless `--time-report-json`
-    // named a file sink instead. The refusal text names both, because a refusal that does
-    // not say what would have worked is a refusal an operator has to guess past.
-    if (time_report and listen == .none and time_report_json == null) {
-        fatal("--time-report requires --listen, or --time-report-json <path> to write the same numbers to a file", .{});
+    // `--time-report` still requires a sink; there are now three of them. Without `--listen`
+    // the IPC sink does not exist, so the refusal stands -- unless `--time-report-json` or
+    // `--module-ledger` named a file sink instead. The refusal text names all three, because
+    // a refusal that does not say what would have worked is a refusal an operator has to
+    // guess past.
+    //
+    // `--module-ledger` counts as a sink because it writes its own file. It force-enables
+    // `time_report` to get the data it rolls up, and without this clause a user who passed
+    // ONLY `--module-ledger` was refused by the name of a flag they never typed -- which is
+    // the opposite of refusing by name.
+    if (time_report and listen == .none and time_report_json == null and module_ledger_json == null) {
+        fatal("--time-report requires --listen, or a file sink: --time-report-json <path> or --module-ledger <path>", .{});
     }
 
     // REFUSE THE COMBINATION BY NAME, because the alternative is a silent no-op.
@@ -3931,6 +3950,7 @@ fn buildOutputType(
     // :3446 and :4555) and a report read earlier would report zeros for them and call
     // that a measurement.
     if (time_report_json) |json_path| try writeTimeReportJson(comp, io, json_path);
+    if (module_ledger_json) |json_path| try writeModuleLedgerJson(comp, io, json_path);
 
     if (switch (arg_mode) {
         .run => true,
@@ -4431,6 +4451,29 @@ fn writeTimeReportJson(comp: *Compilation, io: Io, json_path: []const u8) !void 
         tr.decl_sema_info.count(),
         comp.zcu != null and comp.zcu.?.llvm_object != null,
     });
+    try file_writer.end();
+}
+
+/// Crown stage 2a. Refuses BY NAME when its data source is absent: an empty
+/// ledger and a ledger of zeroes are both lies, and doctrine says an absent
+/// instrument reports UNKNOWN, never zero.
+fn writeModuleLedgerJson(comp: *Compilation, io: Io, json_path: []const u8) !void {
+    var ledger = ModuleLedger.collect(comp.gpa, comp) catch |err| switch (err) {
+        error.NoTimeReport => fatal(
+            "--module-ledger needs the timing data it rolls up, and this compilation " ++
+                "collected none. Pass --time-report-json (or --time-report) as well, or " ++
+                "drop --module-ledger; it will not write a ledger it cannot justify.",
+            .{},
+        ),
+        error.OutOfMemory => |e| return e,
+    };
+    defer ledger.deinit(comp.gpa);
+
+    var file = try Io.Dir.cwd().createFile(io, json_path, .{});
+    defer file.close(io);
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(io, &buffer);
+    try ModuleLedger.writeJson(ledger, &file_writer.interface);
     try file_writer.end();
 }
 
