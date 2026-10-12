@@ -9,6 +9,7 @@ authors:
     orcid: "https://orcid.org/0009-0001-4546-8673"
     affiliation: "EchoSystems AI Studios"
 license: MIT
+doi: "10.5281/zenodo.23309000"
 repository-code: "https://github.com/danielcamposramos/cgm-zig"
 keywords:
   - "Zig"
