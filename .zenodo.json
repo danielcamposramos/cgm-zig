@@ -1,0 +1,34 @@
+{
+  "title": "cgm-zig: the EchoSystems patch set on Zig",
+  "description": "cgm-zig is the EchoSystems patch set on the Zig compiler: toolchain sovereignty for hyper-modular whole-closure builds, provenance first and rebase-friendly. Zig is by the Zig contributors, under the MIT licence.",
+  "creators": [
+    {
+      "name": "Ramos, Daniel Campos",
+      "orcid": "0009-0001-4546-8673",
+      "affiliation": "EchoSystems AI Studios"
+    }
+  ],
+  "contributors": [
+    {
+      "name": "Zig contributors",
+      "type": "RightsHolder"
+    }
+  ],
+  "license": "mit",
+  "upload_type": "software",
+  "access_right": "open",
+  "keywords": [
+    "Zig",
+    "compiler",
+    "toolchain",
+    "provenance",
+    "reproducible builds"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://codeberg.org/ziglang/zig",
+      "relation": "isDerivedFrom",
+      "scheme": "url"
+    }
+  ]
+}

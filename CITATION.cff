@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+type: software
+title: "cgm-zig: the EchoSystems patch set on Zig"
+abstract: "cgm-zig is the EchoSystems patch set on the Zig compiler: toolchain sovereignty for hyper-modular whole-closure builds, provenance first and rebase-friendly. Zig is by the Zig contributors, under the MIT licence."
+authors:
+  - family-names: "Ramos"
+    given-names: "Daniel Campos"
+    orcid: "https://orcid.org/0009-0001-4546-8673"
+    affiliation: "EchoSystems AI Studios"
+license: MIT
+repository-code: "https://github.com/danielcamposramos/cgm-zig"
+keywords:
+  - "Zig"
+  - "compiler"
+  - "toolchain"
+  - "provenance"
+  - "reproducible builds"
