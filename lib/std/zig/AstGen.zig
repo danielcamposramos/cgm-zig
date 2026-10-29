@@ -70,6 +70,14 @@ ref_table: std.AutoHashMapUnmanaged(Zir.Inst.Index, Zir.Inst.Index) = .empty,
 /// data should be used to update this hasher. The result is the final source
 /// hash of the enclosing declaration/etc.
 src_hasher: std.zig.SrcHasher,
+/// Retained correction 8 (C9 P2 packet): the optional identifier-binding
+/// observer. `generateWithIdentifierBindings` stages and owns the sidecar and
+/// installs its address here for the duration of one lowering; `generate`
+/// passes null, so the ordinary compilation path allocates and retains zero
+/// sidecar bytes and pays exactly one predictable null check per successfully
+/// resolved non-primitive identifier (`recordIdentifierBinding`). NOT owned by
+/// this struct: `deinit` must not free it.
+identifier_bindings: ?*IdentifierBindings = null,
 
 const InnerError = error{ OutOfMemory, AnalysisFail };
 
@@ -140,7 +148,180 @@ fn appendRefsAssumeCapacity(astgen: *AstGen, refs: []const Zir.Inst.Ref) void {
     astgen.extra.appendSliceAssumeCapacity(@ptrCast(refs));
 }
 
+/// The category of a locally bound identifier, as AstGen's lexical binder
+/// classified it. A 1:1 mapping of `Scope.IdCat` (`localVarRef`'s own
+/// classification), exported so a consumer can state what kind of local owns a
+/// spelling without re-deriving it.
+pub const IdentifierBindingCategory = enum {
+    function_parameter,
+    local_constant,
+    local_variable,
+    capture,
+    switch_tag_capture,
+};
+
+/// One observed lexical binding decision, keyed by the identifier-use AST node
+/// that produced it (see `IdentifierBindings`). Scalar facts only: the exact
+/// declaration node for a namespace declaration AstGen selected, or the
+/// declaration NAME TOKEN plus category for a local AstGen selected. No
+/// `Scope` pointer, ZIR reference, string-table index, or source slice survives
+/// here, so a fact is valid only alongside the exact `Ast` the generating call
+/// consumed -- the indices name nodes and tokens of that tree and nothing else.
+pub const IdentifierBinding = union(enum) {
+    /// The use resolved to a namespace declaration (`Scope.Namespace.decls`);
+    /// the payload is that declaration's AST node.
+    declaration: Ast.Node.Index,
+    /// The use resolved to a local (`Scope.LocalVal`/`Scope.LocalPtr`); the
+    /// payload is that local's declaration name token (`token_src`) and the
+    /// category AstGen classified it under.
+    local: struct {
+        declaration_token: Ast.TokenIndex,
+        category: IdentifierBindingCategory,
+    },
+    /// A repeated use node arrived with conflicting facts; the sidecar refuses
+    /// to pick a winner. Consumers must treat this as unknown, never as either
+    /// observed fact.
+    unavailable,
+};
+
+/// Opt-in sidecar of `localVarRef`'s lexical binding decisions, produced by
+/// `generateWithIdentifierBindings`. The supported consumer contract is
+/// `get(node)` and `deinit(gpa)`; the map itself is not a supported surface.
+/// Absence from the map is a fact about observation, not about the program: it
+/// means unknown/not observed (a primitive or builtin early return, or a node
+/// the lowering never resolved), NEVER "no binding exists".
+pub const IdentifierBindings = struct {
+    /// Identifier-use AST node -> the binding `localVarRef` selected, recorded
+    /// at the moment of resolution. The map type preserves insertion order,
+    /// but that is not a contract: AstGen does not promise that lowering
+    /// order equals lexical source order, and iteration is not in the
+    /// supported consumer contract. Keyed lookup only -- no order or
+    /// completeness is guaranteed.
+    map: std.AutoArrayHashMapUnmanaged(Ast.Node.Index, IdentifierBinding) = .empty,
+
+    /// The recorded fact for `node`'s use, or null when none was observed.
+    pub fn get(self: *const IdentifierBindings, node: Ast.Node.Index) ?IdentifierBinding {
+        return self.map.get(node);
+    }
+
+    pub fn deinit(self: *IdentifierBindings, gpa: Allocator) void {
+        self.map.deinit(gpa);
+    }
+
+    /// The owner's single recording path (`localVarRef`'s production call via
+    /// `recordIdentifierBinding`, and the semantic unit test below): store a
+    /// first observation; collapse a repeated node that arrives with a
+    /// DIFFERENT fact to `unavailable` -- never last-writer-wins. Private on
+    /// purpose: the supported consumer contract stays `get` + `deinit`, and
+    /// mutable map access is not API.
+    fn record(self: *IdentifierBindings, gpa: Allocator, node: Ast.Node.Index, fact: IdentifierBinding) Allocator.Error!void {
+        const gop = try self.map.getOrPut(gpa, node);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = fact;
+        } else if (!std.meta.eql(gop.value_ptr.*, fact)) {
+            gop.value_ptr.* = .unavailable;
+        }
+    }
+};
+
+/// The result of `generateWithIdentifierBindings`: the same `Zir` `generate`
+/// returns, plus the owned identifier-binding sidecar for the same tree. The
+/// two are companions -- the facts name nodes of the tree both were lowered
+/// from -- and the caller releases the sidecar with `bindings.deinit(gpa)`
+/// independently of the `Zir`.
+pub const GeneratedWithIdentifierBindings = struct {
+    zir: Zir,
+    bindings: IdentifierBindings,
+};
+
+/// The ordinary compilation entry point: unchanged signature, unchanged
+/// behavior. Runs the shared lowering body with a null binding observer, so
+/// this path allocates and retains zero sidecar bytes. The exact added cost
+/// over the pre-sidecar body is one predictable null check at each
+/// successfully resolved non-primitive identifier (`recordIdentifierBinding`)
+/// -- not zero instructions; a stronger claim would need measurement this file
+/// does not make.
 pub fn generate(gpa: Allocator, tree: Ast) Allocator.Error!Zir {
+    return generateInner(gpa, tree, null);
+}
+
+/// Opt-in entry point for consumers that need `localVarRef`'s binding
+/// decisions as data (the `--check-decls` rung-2 checker). Identical lowering
+/// to `generate` -- one shared body -- with the observer installed. The sidecar
+/// is staged and owned HERE: `errdefer` releases it on every error path, and
+/// a lowering whose ZIR carries ANY diagnostic publishes it cleared (see the
+/// diagnostic branch in `generateInner` -- a fatal parse/AnalysisFail lowering
+/// OR a successful `structDeclInner` that appended compile errors), so partial
+/// observations never survive a diagnostic ZIR and only a clean lowering keeps
+/// its facts. Under `--check-decls` a diagnostic lowering has therefore
+/// ALLOCATED sidecar bytes before clearing them -- this entry is requested
+/// before lowering -- which is distinct from the never-requested flagless and
+/// graph-only paths that stay on `generate`.
+pub fn generateWithIdentifierBindings(
+    gpa: Allocator,
+    tree: Ast,
+) Allocator.Error!GeneratedWithIdentifierBindings {
+    var bindings: IdentifierBindings = .{};
+    errdefer bindings.deinit(gpa);
+    const zir = try generateInner(gpa, tree, &bindings);
+    return .{ .zir = zir, .bindings = bindings };
+}
+
+test "IdentifierBindings: absent, recorded, and conflicting observations" {
+    // Retained correction 9 (C9 P2 packet; synthetic indices and the void
+    // variant construction typed per retained correction 10): the sidecar's
+    // observable states -- a never-observed node (absent), a recorded fact,
+    // and a conflicting repeat (`unavailable`) -- exercised distinctly from a
+    // valid empty sidecar, through the same private `record` path
+    // `localVarRef` calls. This in-file test remains the SEMANTIC unit and is
+    // distinct from C9P2-53's allocation-failure controls: retained
+    // corrections 13-14 source-authored C9P2-53's ordinary and opt-in
+    // `checkAllAllocationFailures` control bodies (the fixture
+    // `astgen_allocation_failures.zig`), and the moved-instruction-slice
+    // source repair landed in `generateInner` (staged transfers, immediate
+    // errdefers). Every syntax, allocation, compile, and runtime proof
+    // remains UNEXECUTED -- including C9P2-53's required identical-shape
+    // pre-repair red and rebuilt-candidate post-repair green. Bounded and
+    // allocation-safe: `std.testing.allocator` fails the test on any leak
+    // after the `deinit` below, and nothing here runs lowering.
+    const gpa = std.testing.allocator;
+    var bindings: IdentifierBindings = .{};
+    defer bindings.deinit(gpa);
+
+    // `Ast.Node.Index` is an `enum(u32)`, not a plain integer; the unit's
+    // synthetic nodes are constructed the tree's normal way -- typed locals
+    // through `@enumFromInt` -- never bare integer literals. Token indices
+    // (`declaration_token` is a scalar `Ast.TokenIndex`) stay literals.
+    const node_a: Ast.Node.Index = @enumFromInt(1);
+    const node_b: Ast.Node.Index = @enumFromInt(2);
+    // A void union variant is named by enum-literal coercion to this typed
+    // local, not by namespace syntax on the union type.
+    const unavailable: IdentifierBinding = .unavailable;
+
+    // A valid empty sidecar: a never-observed node reads back null. Absence
+    // means unknown/not observed, NEVER "no binding exists", and never zero.
+    try std.testing.expectEqual(@as(?IdentifierBinding, null), bindings.get(node_a));
+
+    // Record one fact; it reads back exactly.
+    const fact: IdentifierBinding = .{ .local = .{ .declaration_token = 10, .category = .local_constant } };
+    try bindings.record(gpa, node_a, fact);
+    try std.testing.expectEqual(fact, bindings.get(node_a).?);
+
+    // A DIFFERENT node is still absent: recorded and missing are distinct
+    // states.
+    try std.testing.expectEqual(@as(?IdentifierBinding, null), bindings.get(node_b));
+
+    // An AGREEING repeat is not a conflict: the fact survives a second write.
+    try bindings.record(gpa, node_a, fact);
+    try std.testing.expectEqual(fact, bindings.get(node_a).?);
+
+    // A CONFLICTING fact for the same node collapses to `unavailable`,
+    // never last-writer-wins.
+    try bindings.record(gpa, node_a, .{ .local = .{ .declaration_token = 99, .category = .capture } });
+    try std.testing.expectEqual(unavailable, bindings.get(node_a).?);
+}
+
+fn generateInner(gpa: Allocator, tree: Ast, identifier_bindings: ?*IdentifierBindings) Allocator.Error!Zir {
     assert(tree.mode == .zig);
 
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -154,6 +335,7 @@ pub fn generate(gpa: Allocator, tree: Ast) Allocator.Error!Zir {
         .arena = arena.allocator(),
         .tree = &tree,
         .nodes_need_rl = &nodes_need_rl,
+        .identifier_bindings = identifier_bindings,
         .src_hasher = undefined, // `structDeclInner` for the root struct will set this
     };
     defer astgen.deinit(gpa);
@@ -207,6 +389,19 @@ pub fn generate(gpa: Allocator, tree: Ast) Allocator.Error!Zir {
         break :fatal true;
     };
 
+    // Retained correction 8 (C9 P2 packet), condition widened by retained
+    // correction 9: a ZIR that carries ANY diagnostic publishes an EMPTY
+    // sidecar. `structDeclInner` may return successfully while having
+    // appended compile errors, so the trigger is the diagnostic content
+    // itself -- a fatal parse/AnalysisFail lowering OR a non-empty
+    // compile_errors list -- not `fatal` alone. Observations made before the
+    // failure are a partial scope census of a program that does not compile;
+    // they are cleared here, before publication, and never consumable as
+    // valid facts. A clean lowering keeps every fact.
+    if (fatal or astgen.compile_errors.items.len != 0) {
+        if (identifier_bindings) |b| b.map.clearRetainingCapacity();
+    }
+
     const err_index = @intFromEnum(Zir.ExtraIndex.compile_errors);
     if (astgen.compile_errors.items.len == 0) {
         astgen.extra.items[err_index] = 0;
@@ -243,10 +438,32 @@ pub fn generate(gpa: Allocator, tree: Ast) Allocator.Error!Zir {
         }
     }
 
+    // Retained correction 13 (C9 P2 packet, control C9P2-53): the final
+    // aggregate transfer is staged in named locals, in the SAME transfer
+    // order, with an errdefer installed IMMEDIATELY after each move, so an
+    // allocation failure in a later `toOwnedSlice` can no longer leak an
+    // earlier moved slice (the pre-correction body moved `instructions` inline
+    // inside the return expression, where no cleanup could reach it). A
+    // successful return cancels both later errdefers and the caller receives
+    // all three owned slices. `MultiArrayList.Slice.deinit` takes a pointer,
+    // hence the mutable local. On the fatal path the local holds an EMPTY
+    // slice and the still-unmoved `astgen.instructions` stays owned by
+    // `astgen.deinit` (the defer above): deinit of the zero-capacity local
+    // frees a zero-length allocation, which is a no-op (`Allocator.free`
+    // early-returns on len 0), so every path keeps exactly one owner per
+    // allocation.
+    var instructions: std.MultiArrayList(Zir.Inst).Slice =
+        if (fatal) .empty else astgen.instructions.toOwnedSlice();
+    errdefer instructions.deinit(gpa);
+    const string_bytes = try astgen.string_bytes.toOwnedSlice(gpa);
+    errdefer gpa.free(string_bytes);
+    const extra = try astgen.extra.toOwnedSlice(gpa);
+    errdefer gpa.free(extra);
+
     return .{
-        .instructions = if (fatal) .empty else astgen.instructions.toOwnedSlice(),
-        .string_bytes = try astgen.string_bytes.toOwnedSlice(gpa),
-        .extra = try astgen.extra.toOwnedSlice(gpa),
+        .instructions = instructions,
+        .string_bytes = string_bytes,
+        .extra = extra,
     };
 }
 
@@ -8214,6 +8431,32 @@ fn identifier(
     }
 }
 
+/// Maps `Scope.IdCat` onto its exported counterpart, 1:1.
+fn identifierBindingCategory(id_cat: Scope.IdCat) IdentifierBindingCategory {
+    return switch (id_cat) {
+        .@"function parameter" => .function_parameter,
+        .@"local constant" => .local_constant,
+        .@"local variable" => .local_variable,
+        .@"switch tag capture" => .switch_tag_capture,
+        .capture => .capture,
+    };
+}
+
+/// Records one binding decision at the exact point `localVarRef` made it, so
+/// the fact is the decision itself, not a reconstruction of it. No-op on the
+/// ordinary `generate` path (null observer): zero sidecar allocations, one
+/// predictable null check. Delegates to the sidecar's own private `record`
+/// -- the one conflict logic, shared with the semantic unit test -- so no
+/// second recording path exists.
+fn recordIdentifierBinding(
+    astgen: *AstGen,
+    ident: Ast.Node.Index,
+    fact: IdentifierBinding,
+) Allocator.Error!void {
+    const bindings = astgen.identifier_bindings orelse return;
+    try bindings.record(astgen.gpa, ident, fact);
+}
+
 fn localVarRef(
     gz: *GenZir,
     scope: *Scope,
@@ -8245,6 +8488,14 @@ fn localVarRef(
 
                 if (local_val.is_used_or_discarded) |ptr| ptr.* = true;
 
+                // Retained correction 8 (C9 P2 packet): record the exact local
+                // that owns this use, BEFORE the closure tunnel below can
+                // transform the reference shape.
+                try astgen.recordIdentifierBinding(ident, .{ .local = .{
+                    .declaration_token = local_val.token_src,
+                    .category = identifierBindingCategory(local_val.id_cat),
+                } });
+
                 const value_inst = if (num_namespaces_out != 0) try tunnelThroughClosure(
                     gz,
                     ident,
@@ -8265,6 +8516,16 @@ fn localVarRef(
                 } else {
                     local_ptr.used = .fromToken(ident_token);
                 }
+
+                // Retained correction 8 (C9 P2 packet): record the exact local
+                // that owns this use, before the mutable-use checks and closure
+                // tunnels below -- the binding decision already succeeded, and a
+                // use that fails those checks fails the whole lowering, which
+                // clears all facts.
+                try astgen.recordIdentifierBinding(ident, .{ .local = .{
+                    .declaration_token = local_ptr.token_src,
+                    .category = identifierBindingCategory(local_ptr.id_cat),
+                } });
 
                 if (!local_ptr.maybe_comptime and !gz.is_typeof) {
                     if (num_namespaces_out != 0) {
@@ -8334,6 +8595,12 @@ fn localVarRef(
         const ident_name = try astgen.identifierTokenString(ident_token);
         return astgen.failNode(ident, "use of undeclared identifier '{s}'", .{ident_name});
     }
+
+    // Retained correction 8 (C9 P2 packet): the namespace walk settled on
+    // exactly one declaration (ambiguity failed above); record it BEFORE any
+    // closure tunneling below transforms the reference, so the fact stays the
+    // exact declaration node that owns this use -- tunneling cannot erase it.
+    try astgen.recordIdentifierBinding(ident, .{ .declaration = found_already.? });
 
     // Decl references happen by name rather than ZIR index so that when unrelated
     // decls are modified, ZIR code containing references to them can be unmodified.

@@ -1,0 +1,164 @@
+{
+  "modules": [
+    {
+      "index": 0,
+      "fully_qualified_name": "c9p2.util",
+      "root": ".",
+      "root_src_path": "util.zig",
+      "optimize_mode": "Debug",
+      "strip": false,
+      "single_threaded": false,
+      "code_model": "default",
+      "deps": []
+    },
+    {
+      "index": 1,
+      "fully_qualified_name": "c9p2.alpha",
+      "root": "lib_a",
+      "root_src_path": "alpha.zig",
+      "optimize_mode": "Debug",
+      "strip": false,
+      "single_threaded": false,
+      "code_model": "default",
+      "deps": [
+        {
+          "import_name": "util",
+          "dep_index": 0,
+          "dep_fully_qualified_name": "c9p2.util"
+        },
+        {
+          "import_name": "shared",
+          "dep_index": 4,
+          "dep_fully_qualified_name": "c9p2.dupe_a"
+        },
+        {
+          "import_name": "opaque_mod",
+          "dep_index": 3,
+          "dep_fully_qualified_name": "c9p2.opaque_mod"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "fully_qualified_name": "c9p2.beta",
+      "root": "lib_b",
+      "root_src_path": "beta.zig",
+      "optimize_mode": "Debug",
+      "strip": false,
+      "single_threaded": false,
+      "code_model": "default",
+      "deps": [
+        {
+          "import_name": "util",
+          "dep_index": 0,
+          "dep_fully_qualified_name": "c9p2.util"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "fully_qualified_name": "c9p2.opaque_mod",
+      "root": "lib_o",
+      "root_src_path": "opaque.zig",
+      "optimize_mode": "Debug",
+      "strip": false,
+      "single_threaded": false,
+      "code_model": "default",
+      "deps": []
+    },
+    {
+      "index": 4,
+      "fully_qualified_name": "c9p2.dupe_a",
+      "root": "lib_d1",
+      "root_src_path": "same.zig",
+      "optimize_mode": "Debug",
+      "strip": false,
+      "single_threaded": false,
+      "code_model": "default",
+      "deps": [
+        {
+          "import_name": "shared",
+          "dep_index": 5,
+          "dep_fully_qualified_name": "c9p2.dupe_b"
+        },
+        {
+          "import_name": "ghost_mod",
+          "dep_index": 8,
+          "dep_fully_qualified_name": "c9p2.ghost_mod"
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "fully_qualified_name": "c9p2.dupe_b",
+      "root": "lib_d2",
+      "root_src_path": "same.zig",
+      "optimize_mode": "Debug",
+      "strip": false,
+      "single_threaded": false,
+      "code_model": "default",
+      "deps": [
+        {
+          "import_name": "broken",
+          "dep_index": null,
+          "dep_fully_qualified_name": null
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "fully_qualified_name": "c9p2.twin",
+      "root": "lib_t1",
+      "root_src_path": "twin.zig",
+      "optimize_mode": "Debug",
+      "strip": false,
+      "single_threaded": false,
+      "code_model": "default",
+      "deps": [
+        {
+          "import_name": "util",
+          "dep_index": 0,
+          "dep_fully_qualified_name": "c9p2.util"
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "fully_qualified_name": "c9p2.twin",
+      "root": "lib_t2",
+      "root_src_path": "twin.zig",
+      "optimize_mode": "Debug",
+      "strip": false,
+      "single_threaded": false,
+      "code_model": "default",
+      "deps": [
+        {
+          "import_name": "util",
+          "dep_index": 0,
+          "dep_fully_qualified_name": "c9p2.util"
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "fully_qualified_name": "c9p2.ghost_mod",
+      "root": "lib_g",
+      "root_src_path": "ghost_src.zig",
+      "optimize_mode": "Debug",
+      "strip": false,
+      "single_threaded": false,
+      "code_model": "default",
+      "deps": []
+    }
+  ],
+  "roots": [
+    {
+      "role": "std",
+      "index": null
+    },
+    {
+      "role": "root",
+      "index": null
+    }
+  ]
+}

@@ -6570,6 +6570,54 @@ const usage_ast_check =
     \\                        with exactly one [file] and no --json
     \\  --module-graph=<path> Also validate @import operands against a stage-0 module
     \\                        graph (Crown stage 0.5 rung 1; requires [file], not stdin)
+    \\  --check-decls         Also resolve top-level declaration references reached via
+    \\                        @import (Crown stage 0.5 rung 2, "sema-lite"; requires
+    \\                        --module-graph). Scope: whether the referenced declaration
+    \\                        exists and is public, plus the SYNTACTIC argument count of
+    \\                        each DIRECT call whose callee is exactly a supported member
+    \\                        reference (inline @import("x").f or a const import alias --
+    \\                        root/file-scope or function-local, the binding decided by
+    \\                        the compiler's own lexical resolver, never a file-wide name
+    \\                        match) compared against the target declaration's
+    \\                        fixed syntactic parameter count. Types and comptime are NOT
+    \\                        checked; generic/comptime/anytype/variadic callees and
+    \\                        function-valued consts are counted skipped, never compared;
+    \\                        calls through any other shape (obj.method, deeper hops,
+    \\                        parameters, captures, mutable or chained locals) are
+    \\                        outside the population, never guessed, and every summary's
+    \\                        second line states the boundary.
+    \\                        Named-import member targets resolve through the graph-wide
+    \\                        conservative union by default; when --as-module also binds
+    \\                        this run, they resolve through exactly that module's own
+    \\                        dependency table instead, and a name it does not declare or
+    \\                        declares unresolved is counted target-unresolvable, never
+    \\                        guessed. Must be run from the same
+    \\                        working directory the graph was emitted from: the
+    \\                        graph records each module's root relative to that
+    \\                        directory, and rung 2 joins them against this process's own
+    \\                        working directory.
+    \\  --as-module=<name-or-index>
+    \\                        Bind the checked file to exactly one module from the graph
+    \\                        (its fully_qualified_name, or its numeric ModuleNode index
+    \\                        if the name is ambiguous or unknown), upgrading two checks
+    \\                        from --module-graph's advisory graph-wide semantics to
+    \\                        strict, per-module ones: named imports are checked against
+    \\                        exactly that module's declared deps (not every module's
+    \\                        union), and when --check-decls also runs, its named
+    \\                        member targets resolve through that same table; file
+    \\                        imports (.zig/.zon) are additionally
+    \\                        sandbox-checked against the module's own root directory
+    \\                        (Crown stage 0.5 rung 4). Requires --module-graph=<path>;
+    \\                        invalid alone. In batch mode, one --as-module binds ALL
+    \\                        .zig members of the batch -- there is no per-file binding.
+    \\                        DIVERGENCE, stated: the sandbox check is a strictness this
+    \\                        flag CHOOSES. The compiler enforces no @import sandbox
+    \\                        today -- only @embedFile refuses an outside-package path --
+    \\                        so --as-module can reject an @import that compiles fine.
+    \\                        Package/Module.zig states the intended contract ("Only
+    \\                        files inside this directory can be imported"); this flag
+    \\                        checks it before a build rather than reporting parity with
+    \\                        one the compiler already enforces.
     \\  --json                Emit per-file diagnostics and the batch summary as one
     \\                        machine-readable JSON document to stdout instead of the
     \\                        human-readable rendering (Crown stage 0.5 rung 3; valid
@@ -6599,6 +6647,14 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
     // Crown stage 0.5 rung 1 (docs/crown/PLAN.md): additive, off by default. Non-null only
     // when the operator opts in; see `AstCheckImports.checkAgainstGraph`.
     var module_graph_path: ?[]const u8 = null;
+    // Crown stage 0.5 rung 2 (docs/crown/PLAN.md): additive, off by default, and only
+    // meaningful alongside rung 1 (it resolves references reached through the same graph
+    // rung 1 loads) -- refused just below the arg-parse loop if given alone.
+    var check_decls = false;
+    // Crown stage 0.5 rung 4 (docs/crown/PLAN.md): additive, off by default. Valid only
+    // alongside `module_graph_path` -- refused just below the arg-parse loop if given
+    // alone. See `AstCheckImports.resolveAsModule`.
+    var as_module_spec: ?[]const u8 = null;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -6615,6 +6671,10 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
                 want_json = true;
             } else if (mem.cutPrefix(u8, arg, "--module-graph=")) |rest| {
                 module_graph_path = rest;
+            } else if (mem.eql(u8, arg, "--check-decls")) {
+                check_decls = true;
+            } else if (mem.cutPrefix(u8, arg, "--as-module=")) |rest| {
+                as_module_spec = rest;
             } else if (mem.eql(u8, arg, "--color")) {
                 if (i + 1 >= args.len) {
                     fatal("expected [auto|on|off] after --color", .{});
@@ -6630,6 +6690,19 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
         } else {
             try file_paths.append(arena, arg);
         }
+    }
+
+    // Crown stage 0.5 rungs 2 and 4: both flags have no meaning without a graph to
+    // resolve against -- rung 2 walks the same graph's dependency edges, and rung 4 binds
+    // to a module node from it. Named fatal (doctrine 2) rather than silently ignoring
+    // either, checked once here (after the parse loop, before the dispatch below) so every
+    // downstream path -- single-file, batch, stdin, --json -- inherits the refusal
+    // uniformly instead of each needing its own copy of the check.
+    if (check_decls and module_graph_path == null) {
+        fatal("--check-decls requires --module-graph=<path> (Crown stage 0.5 rung 2 resolves references through rung 1's graph; there is no graph to resolve against without one)", .{});
+    }
+    if (as_module_spec != null and module_graph_path == null) {
+        fatal("--as-module requires --module-graph=<path> (it binds the checked file to a module from a graph; there is no graph to bind against without one)", .{});
     }
 
     // Crown stage 0.5 rung 3 dispatch. Exactly one file with no --json assigns
@@ -6674,7 +6747,7 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
                 fatal("--module-graph requires a Zig source file; ZON has no imports to validate", .{});
             }
         }
-        return AstCheckBatch.run(arena, io, file_paths.items, color, force_zon, module_graph_path, want_json);
+        return AstCheckBatch.run(arena, io, file_paths.items, color, force_zon, module_graph_path, as_module_spec, check_decls, want_json);
     }
 
     // --module-graph resolves relative file imports against the checked file's directory,
@@ -6722,7 +6795,27 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
     const stdout_bw = &stdout_writer.interface;
     switch (mode) {
         .zig => {
-            const zir = try AstGen.generate(arena, tree);
+            // Retained correction 8 (allocation honesty per retained correction 9):
+            // request AstGen's identifier-binding sidecar ONLY when rung 2 will run --
+            // `--check-decls` requires `--module-graph` (refused above). The flagless
+            // and graph-only paths never REQUEST the sidecar at all: they stay on the
+            // ordinary `generate` entry point, allocating and retaining zero sidecar
+            // bytes. A `--check-decls` run whose lowering produces diagnostics is
+            // DIFFERENT: the sidecar was requested before lowering and may have
+            // allocated facts on the way to the failure -- the lowering clears them
+            // before publication -- so that path's claim is requested-then-cleared,
+            // never zero-allocation; the gate below then refuses rung 2 on the
+            // diagnostic ZIR. The sidecar is owned by this scope for the rest of the
+            // `.zig` arm and released by the `defer` immediately below on every
+            // return out of it; the two `process.exit` paths skip all defers by
+            // construction (noreturn), exactly as they already skip the arena's.
+            var generated: ?AstGen.GeneratedWithIdentifierBindings = if (check_decls)
+                try AstGen.generateWithIdentifierBindings(arena, tree)
+            else
+                null;
+            defer if (generated) |*g| g.bindings.deinit(arena);
+            const bindings: ?*const AstGen.IdentifierBindings = if (generated) |*g| &g.bindings else null;
+            const zir = if (generated) |*g| g.zir else try AstGen.generate(arena, tree);
 
             if (zir.hasCompileErrors()) {
                 var wip_errors: std.zig.ErrorBundle.Wip = undefined;
@@ -6739,10 +6832,16 @@ fn cmdAstCheck(arena: Allocator, io: Io, args: []const []const u8) !void {
             // work above has already succeeded on this file (no ZIR compile errors) do we
             // additionally validate its @import operands against the module graph. Absent
             // --module-graph this whole block is unreachable and behavior is byte-identical
-            // to upstream ast-check.
+            // to upstream ast-check. Rungs 2 (--check-decls) and 4 (--as-module) compose
+            // inside `checkAgainstGraph` under the same reachability: both are refused
+            // above without --module-graph, so this block is likewise the only place they
+            // can run, and absent all three flags nothing below the parse loop changes.
             if (module_graph_path) |graph_path| {
                 if (!zir.hasCompileErrors()) {
-                    try AstCheckImports.checkAgainstGraph(arena, io, tree, zig_source_path.?, display_path, graph_path, color);
+                    // `bindings` is non-null exactly when `check_decls` (see the opt-in
+                    // above), which is the only shape `checkAgainstGraph` threads it
+                    // into rung 2 under (retained correction 8).
+                    try AstCheckImports.checkAgainstGraph(arena, io, tree, zig_source_path.?, display_path, graph_path, as_module_spec, check_decls, bindings, color);
                 }
             }
 
