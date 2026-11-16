@@ -114,7 +114,15 @@
 </div>
 <p>It changes nothing in the language. Every new behaviour sits behind a new flag, and a stock invocation behaves like stock Zig.</p>
 
-<figure data-extra="build-timings"><!-- Build timings per release, with workload and measurement bounds. --></figure>
+<figure data-extra="build-timings"><!-- Build timings per release, with workload and measurement bounds. -->
+<figcaption>The runs the repository records, each with its workload. They are wall-clock readings on the maintainer&rsquo;s build station; the rows are different workloads and are not compared with each other.</figcaption>
+<div class="table-wrap" role="region" aria-label="Recorded runs" tabindex="0"><table><caption>Recorded runs</caption><thead><tr><th scope="col">Compiler</th><th scope="col">Workload</th><th scope="col">What the record shows</th><th scope="col">Source</th></tr></thead><tbody>
+<tr><td data-label="Compiler">Stock Zig 0.16.0</td><td data-label="Workload">The full build of about 1,800 modules, as one compilation unit</td><td data-label="What the record shows">Died silently after more than two hours, every time</td><td data-label="Source"><a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#why-this-fork-exists">README</a></td></tr>
+<tr><td data-label="Compiler">cgm-zig 0.16.0+cgm.046d6833</td><td data-label="Workload">The same full build</td><td data-label="What the record shows">Completed in under 45 minutes, six full builds in a row without running out of memory</td><td data-label="Source"><a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#why-this-fork-exists">README</a></td></tr>
+<tr><td data-label="Compiler">cgm-zig at commit a7f31c36</td><td data-label="Workload">The same workload, the run in which the named message fired twice</td><td data-label="What the record shows">Completed, exit 0, in 18 min 10 s with an 18.4 GiB peak</td><td data-label="Source"><a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#a-the-frontend-crash-becomes-a-named-refusal">README, (a)</a></td></tr>
+<tr><td data-label="Compiler">Building cgm-zig itself</td><td data-label="Workload">A clean build of the compiler under an 8-CPU mask on a busy host</td><td data-label="What the record shows">About 41 minutes; 8 to 9 minutes on an idle, unconstrained host</td><td data-label="Source"><a href="https://github.com/danielcamposramos/cgm-zig/blob/main/docs/crown/BUILDING.md">BUILDING.md</a></td></tr>
+</tbody></table></div>
+</figure>
 
 <h2 id="doors">Where to go next</h2>
 <ul class="doors">
