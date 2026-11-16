@@ -63,7 +63,7 @@ a:hover { text-decoration-thickness: .14em; }
 .skip { position: absolute; left: -999px; top: 0; background: var(--btn-bg); color: var(--btn-text); padding: .75rem 1rem; z-index: 10; }
 .skip:focus { left: var(--gutter); }
 h1, h2, h3 { color: var(--heading); line-height: 1.2; text-wrap: balance; }
-h1 { font-size: clamp(2rem, 5vw, 3rem); margin: 0 0 var(--space-6); letter-spacing: -.035em; }
+h1 { font-size: clamp(2rem, 5vw, 48px); margin: 0 0 var(--space-6); letter-spacing: -.035em; }
 h2 { font-size: clamp(1.5rem, 3vw, 1.875rem); margin: var(--space-12) 0 var(--space-6); letter-spacing: -.025em; }
 h3 { font-size: 1.125rem; margin: var(--space-8) 0 var(--space-3); }
 main > .wrap > h2 { border-top: 1px solid var(--line); padding-top: var(--space-8); clear: both; }
