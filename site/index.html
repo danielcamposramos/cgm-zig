@@ -58,7 +58,7 @@
 </figure>
 
 <h2 id="why">Why it exists</h2>
-<p>Zig&rsquo;s compiler keeps its work in tables addressed by 32-bit indexes. On a project this large, an empty-slot marker was read as a real index and the compiler died with no message at all. Stock release builds compile out the check that would have named the problem.</p>
+<p>Zig&rsquo;s compiler keeps its work in tables addressed by 32-bit indexes. On a project this large, an empty-slot marker was read as a real index and the compiler died with no message at all. Stock release builds leave out the check that would have named the problem.</p>
 <p>cgm-zig keeps that check, so running out of room now stops with a message that names the thread, the index reached and the limit. It also raises the limit it was hitting, from 67,108,863 to 134,217,727 items per partition. The details, with the files and commits, are on <a href="changes.html">What changes</a>.</p>
 <p>It changes nothing in the language. Every new behaviour sits behind a new flag, and a stock invocation behaves like stock Zig.</p>
 
