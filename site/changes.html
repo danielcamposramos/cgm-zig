@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What changes: cgm-zig patches and what was measured</title>
+<meta name="description" content="Each cgm-zig patch on Zig 0.16.0 in plain words, with the measured result the repository records and what was not measured.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="What changes: cgm-zig patches and what was measured">
+<meta property="og:description" content="Each cgm-zig patch on Zig 0.16.0 in plain words, with the measured result the repository records and what was not measured.">
+<meta property="og:image" content="https://danielcamposramos.github.io/cgm-zig/img/social-card.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+<header class="site-header">
+<div class="wrap">
+<a class="brand" href="index.html"><img src="img/echosystems-symbol-128.png" width="40" height="40" alt="EchoSystems AI Studios symbol"><span>cgm-zig</span></a>
+<nav aria-label="Main"><ul class="nav"><li><a href="changes.html" aria-current="page">What changes</a></li><li><a href="get.html">Get it</a></li><li><a href="about.html">About and credits</a></li></ul></nav>
+</div>
+</header>
+<main id="main">
+<div class="wrap">
+
+<p class="crumbs"><a href="index.html">cgm-zig</a> / What changes</p>
+<h1>What changes</h1>
+<p class="lead">cgm-zig is a patch set on Zig 0.16.0. Every new compiler behaviour sits behind a new flag, so a stock invocation behaves like stock Zig.</p>
+<p>The rows below are drawn from the repository&rsquo;s commit messages and verification records. Where the record holds no measurement of a change&rsquo;s effect, the row says <strong>not yet measured</strong> and does not claim one. The full table, with every file and commit, is in the <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#what-differs-from-upstream-zig-0160">README</a>.</p>
+<p>&ldquo;Ships off&rdquo; means the change is in the build but only runs when you ask for it, because its own measurement came out slower.</p>
+
+<h2 id="crash">A crash becomes a named message</h2>
+<div class="patch-section">
+<figure class="fact-figure patch-map"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 230" role="img" aria-labelledby="crash-map-title"><title id="crash-map-title">The index grows from 30 to 31 bits, and the limit the report line prints grows with it.</title>
+<path class="diagram-rule" d="M28 32V181"/>
+<path class="diagram-arrow" d="M28 55H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="57">assert</text>
+<text class="diagram-detail" x="68" y="91">message</text>
+<path class="diagram-arrow" d="M28 153H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="155">30 to 31 bits</text>
+<text class="diagram-detail" x="68" y="189">67,108,863 to 134,217,727</text>
+
+</svg></figure>
+<div class="table-wrap" role="region" aria-label="Crash and index limit" tabindex="0"><table><caption>Crash and index limit</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
+<tr><td data-label="Change">Running out of room in the compiler&rsquo;s index table stops with a message naming the thread, the index reached, the limit and the remedy. Stock Zig has only an <code>assert</code>, which release builds remove.</td><td data-label="What the record shows">Fired live in production twice. The 1,800-module workload then completed where every stock compiler died: exit 0, 18 min 10 s, 18.4 GiB peak (commit <code>a7f31c36</code>).</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change">The index grows from 30 to 31 bits, and the limit the report line prints grows with it.</td><td data-label="What the record shows">The per-partition ceiling goes from 67,108,863 to 134,217,727. The plan predicted 4 times; the tree measured 2 times, and the correction is recorded where the prediction was made. The functional suite matched its control: identical failure sets, none unique to this tree.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+</tbody></table></div>
+</div>
+
+<p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#a-the-frontend-crash-becomes-a-named-refusal">(a) in the README</a>.</p>
+
+<h2 id="diagnostics">Messages and reports that name the thing</h2>
+<div class="patch-section">
+<figure class="fact-figure patch-map"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 426" role="img" aria-labelledby="diagnostics-map-title"><title id="diagnostics-map-title">The error for a file owned by two modules names that file, not whichever importer was scanned first.</title>
+<path class="diagram-rule" d="M28 32V377"/>
+<path class="diagram-arrow" d="M28 55H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="57">mod_b.zig:1:1</text>
+<text class="diagram-detail" x="68" y="91">dupe.zig:1:1</text>
+<path class="diagram-arrow" d="M28 153H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="155">-femit-module-graph</text>
+<text class="diagram-detail" x="68" y="189">JSON before any analysis</text>
+<path class="diagram-arrow" d="M28 251H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="253">--time-report-json</text>
+<text class="diagram-detail" x="68" y="287">time report to a file</text>
+<path class="diagram-arrow" d="M28 349H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="351">--listen</text>
+<text class="diagram-detail" x="68" y="385">stays quiet</text>
+
+</svg></figure>
+<div class="table-wrap" role="region" aria-label="Diagnostics" tabindex="0"><table><caption>Diagnostics</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
+<tr><td data-label="Change">The error for a file owned by two modules names that file, not whichever importer was scanned first.</td><td data-label="What the record shows">Before: <code>mod_b.zig:1:1</code>. After: <code>dupe.zig:1:1</code>. Two test snapshots that had pinned the wrong text are tightened, not weakened.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change"><code>-femit-module-graph</code> writes the resolved module graph as JSON before any analysis.</td><td data-label="What the record shows">Stock invocations are byte-identical. Effect on a real workload: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change"><code>--time-report-json &lt;path&gt;</code> writes the time report to a file, without needing a live listener.</td><td data-label="What the record shows">It made one finding measurable: the linker&rsquo;s CPU time was 11.2 times its wall time, so it ran beside analysis.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change">The thread-plan report line stays quiet under <code>--listen</code>, as <code>--time-report</code> already does.</td><td data-label="What the record shows">A green <code>zig build</code> of a 13-step fixture went from 6 error lines to 0.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+</tbody></table></div>
+</div>
+
+<p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#b-diagnostics-that-name-the-thing">(b) in the README</a>.</p>
+
+<h2 id="threads">Threading and ordering</h2>
+<div class="patch-section">
+<figure class="fact-figure patch-map"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 720" role="img" aria-labelledby="threads-map-title"><title id="threads-map-title">The worker count is separated from the number of index partitions, so -j moves workers and leaves the limit alone.</title>
+<path class="diagram-rule" d="M28 32V671"/>
+<path class="diagram-arrow" d="M28 55H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="57">std.Thread.Topology</text>
+<text class="diagram-detail" x="68" y="91">physical cores and SMT siblings</text>
+<path class="diagram-arrow" d="M28 153H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="155">-j</text>
+<text class="diagram-detail" x="68" y="189">moves workers</text>
+<path class="diagram-arrow" d="M28 251H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="253">--step-order</text>
+<text class="diagram-detail" x="68" y="287">layered order by default</text>
+<path class="diagram-arrow" d="M28 349H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="351">--analysis-order=layered</text>
+<text class="diagram-detail" x="68" y="385">Ships off</text>
+<path class="diagram-arrow" d="M28 447H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="449">reserve of slots</text>
+<text class="diagram-detail" x="68" y="483">linker</text>
+<path class="diagram-arrow" d="M28 545H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="547">--child-jobs=keep|share|N</text>
+<text class="diagram-detail" x="68" y="581">Default keep</text>
+<path class="diagram-arrow" d="M28 643H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="645">thread-id pool</text>
+<text class="diagram-detail" x="68" y="679">refused by name</text>
+
+</svg></figure>
+<div class="table-wrap" role="region" aria-label="Threading" tabindex="0"><table><caption>Threading</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
+<tr><td data-label="Change"><code>std.Thread.Topology</code> reads physical cores and SMT siblings, limited to the cores the process may use. Unknown stays unknown: never guessed as 1 or half the logical count.</td><td data-label="What the record shows">7 of 7 test masks match the sysfs reference. The affinity sabotage control: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change">The worker count is separated from the number of index partitions, so <code>-j</code> moves workers and leaves the limit alone.</td><td data-label="What the record shows"><code>-j1</code> gives 8 partitions. 1,200 files at <code>-j64</code> give the same result as <code>-j1</code>. On a 6-core, 12-thread host the derived limit is 4.00 times the crash&rsquo;s ceiling, derived from constants; the real workload&rsquo;s reproduction is <strong>not yet measured</strong> in the harness. Race freedom is read and type verified only, and named as a residual.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change">Build steps run in layered order by default (<code>--step-order</code>).</td><td data-label="What the record shows">13 steps: 3.567 s layered, 3.631 s random, 3.760 s declared. A weak result, inside the noise against random.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change"><code>--analysis-order=layered</code>, a priority over work that would be analysed anyway.</td><td data-label="What the record shows">+6.59% slower than insertion order in 3 of 3 paired runs, so it stays off. The new optional index behind it has no end-to-end timing yet.</td><td data-label="Status"><span class="tag off">Ships off</span></td></tr>
+<tr><td data-label="Change">A reserve of slots keeps the linker from being starved by bulk work.</td><td data-label="What the record shows">0 of 881 thread samples were parked waiting. The deliberate-failure controls: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change"><code>zig build --child-jobs=keep|share|N</code> passes <code>-j</code> to child compilers. Default <code>keep</code>.</td><td data-label="What the record shows"><code>share</code> cut peak worker threads from 35 to 10 but was 6.55% slower in 3 of 3 paired runs, so the default stays <code>keep</code>. A small fixture is where <code>share</code> costs most; a large project could invert it.</td><td data-label="Status"><span class="tag off"><code>share</code> ships off</span></td></tr>
+<tr><td data-label="Change">A hang the patch set itself caused (a starved thread-id pool) is refused by name.</td><td data-label="What the record shows">Found by the harness and fixed in the same run: 0 hangs in 6 configurations, where the first build hung.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+</tbody></table></div>
+</div>
+
+<p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#c-threading-and-topology">(c) in the README</a>.</p>
+
+<h2 id="tooling">Checks before compiling</h2>
+<div class="patch-section">
+<figure class="fact-figure patch-map"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 328" role="img" aria-labelledby="tooling-map-title"><title id="tooling-map-title">Without the flag, output is byte-identical to upstream.</title>
+<path class="diagram-rule" d="M28 32V279"/>
+<path class="diagram-arrow" d="M28 55H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="57">ast-check --module-graph</text>
+<text class="diagram-detail" x="68" y="91">file’s imports</text>
+<path class="diagram-arrow" d="M28 153H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="155">ast-check</text>
+<text class="diagram-detail" x="68" y="189">many files at once</text>
+<path class="diagram-arrow" d="M28 251H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="253">Compilation.resolveEmitPath</text>
+<text class="diagram-detail" x="68" y="287">pub</text>
+
+</svg></figure>
+<div class="table-wrap" role="region" aria-label="Pre-compile tooling" tabindex="0"><table><caption>Pre-compile tooling</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
+<tr><td data-label="Change"><code>zig ast-check --module-graph=&lt;path&gt; file.zig</code> checks a file&rsquo;s imports against the module graph and ends with one summary you can reconcile.</td><td data-label="What the record shows">Without the flag, output is byte-identical to upstream. Effect on a workload: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change"><code>zig ast-check</code> takes many files at once, with a machine-readable <code>--json</code> report.</td><td data-label="What the record shows">Memory stays flat: 400 files at 7.6 MB. Beyond that: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change">One word: <code>Compilation.resolveEmitPath</code> becomes <code>pub</code>, because the module graph code calls it from another file.</td><td data-label="What the record shows">After the fix the type check reports 0 errors and the stage 3 build exits 0.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+</tbody></table></div>
+</div>
+
+<p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#d-pre-compile-tooling">(d)</a> and <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#e-a-one-word-visibility-fix-on-upstream-code">(e) in the README</a>.</p>
+
+<figure data-extra="patch-files"><!-- Patch list with its files and the recorded index limits. -->
+<figcaption>Every change to the compiler&rsquo;s source since Zig 0.16.0 was imported: 20 commits, 22 files, 4,618 lines added and 285 removed across those commits. Read from the repository&rsquo;s history by <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/site/extras/generate.py">a script</a>, not typed by hand.</figcaption>
+<div class="table-wrap" role="region" aria-label="Commits that change the compiler" tabindex="0"><table><caption>Commits that change the compiler</caption><thead><tr><th scope="col">Date</th><th scope="col">Change</th><th scope="col">Files</th><th scope="col">Lines</th></tr></thead><tbody>
+<tr><td data-label="Date">2026-08-22</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/8a3b1f1f76631d60352347bee4459fa6f6cb3389">InternPool: refuse by name when the per-thread Index space is exhausted</a></td><td data-label="Files"><code>src/InternPool.zig</code></td><td data-label="Lines">+44 &minus;1</td></tr>
+<tr><td data-label="Date">2026-08-22</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/7ef21e281925aa26af78a879f35c4a159bb60b52">Crown stage 0: -femit-module-graph — the compiler emits its resolved module graph as JSON</a></td><td data-label="Files"><code>lib/std/zig.zig</code>, <code>src/Compilation.zig</code>, <code>src/Compilation/EmitModuleGraph.zig</code> and 2 more</td><td data-label="Lines">+230 &minus;0</td></tr>
+<tr><td data-label="Date">2026-08-22</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/885fada0d4551a7de8c253ef1bd912398504a0d6">Crown stage 0.5 rung 1: import-aware ast-check (--module-graph)</a></td><td data-label="Files"><code>src/AstCheckImports.zig</code>, <code>src/main.zig</code></td><td data-label="Lines">+293 &minus;0</td></tr>
+<tr><td data-label="Date">2026-08-22</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/3d37ca1e104419d3c9e947c3cf8269f78eb4c9ec">Crown stage 0.5 rung 3: ast-check batch mode with honest denominators + --json</a></td><td data-label="Files"><code>src/AstCheckBatch.zig</code>, <code>src/AstCheckImports.zig</code>, <code>src/main.zig</code></td><td data-label="Lines">+778 &minus;38</td></tr>
+<tr><td data-label="Date">2026-08-22</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/76a0b267a4c8a412190d359f9e5b6cadc1577a19">Zcu: name the double-owned file in the file-exists-in-multiple-modules diagnostic</a></td><td data-label="Files"><code>src/Zcu.zig</code>, <code>src/Zcu/PerThread.zig</code></td><td data-label="Lines">+14 &minus;1</td></tr>
+<tr><td data-label="Date">2026-08-22</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/7106d3681580609dc9b6a249cccb821beea87b10">patch/005a: std.Thread.Topology -- physical cores and SMT siblings, affinity-masked</a></td><td data-label="Files"><code>lib/std/Thread.zig</code>, <code>lib/std/Thread/Topology.zig</code>, <code>src/ThreadPlan.zig</code> and 1 more</td><td data-label="Lines">+823 &minus;22</td></tr>
+<tr><td data-label="Date">2026-08-22</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/016d898703e86be5a742df5ab80ab2da31902bb8">patch/005b: split the worker count from the InternPool partition count</a></td><td data-label="Files"><code>src/Compilation.zig</code>, <code>src/InternPool.zig</code>, <code>src/Sema.zig</code> and 4 more</td><td data-label="Lines">+420 &minus;52</td></tr>
+<tr><td data-label="Date">2026-08-22</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/2a9ca530098f232c17fdda2dbc49206a879a11b7">patch/005c: edges-first ordering -- layered at the step level, ranked inside the compilation</a></td><td data-label="Files"><code>lib/compiler/build_runner.zig</code>, <code>src/Compilation.zig</code>, <code>src/Compilation/ModuleRanking.zig</code> and 3 more</td><td data-label="Lines">+620 &minus;7</td></tr>
+<tr><td data-label="Date">2026-08-22</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/0711a34e54bf1529e5d56b0a51ba0ec49ff2e3d9">rider 1: Io.Threaded -- stop io.async from eating io.concurrent&#x27;s admission budget</a></td><td data-label="Files"><code>lib/std/Io/Threaded.zig</code>, <code>src/main.zig</code></td><td data-label="Lines">+59 &minus;2</td></tr>
+<tr><td data-label="Date">2026-08-22</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/9a7cbab8ad94cd1e96479223775027071d905925">rider 2: -j reaches child compilers -- share the machine instead of handing out N copies</a></td><td data-label="Files"><code>lib/compiler/build_runner.zig</code>, <code>lib/std/Build.zig</code>, <code>lib/std/Build/Step/Compile.zig</code></td><td data-label="Lines">+138 &minus;0</td></tr>
+<tr><td data-label="Date">2026-08-23</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/e0bcdab29d65d610616add2ad0a0e0ce05634462">Compilation: resolveEmitPath becomes pub -- main has not compiled since Crown stage 0</a></td><td data-label="Files"><code>src/Compilation.zig</code></td><td data-label="Lines">+1 &minus;1</td></tr>
+<tr><td data-label="Date">2026-08-23</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/f52308a4468e291f644830ab435a2e9ef4505591">ThreadPlan: the topology line stops speaking into the build runner&#x27;s IPC channel</a></td><td data-label="Files"><code>src/ThreadPlan.zig</code>, <code>src/main.zig</code></td><td data-label="Lines">+39 &minus;10</td></tr>
+<tr><td data-label="Date">2026-08-23</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/95cea4e2ad03617df52576c41eee6d51bed6d5cb">main: --time-report-json -- the timing instrument becomes readable by a script</a></td><td data-label="Files"><code>src/main.zig</code></td><td data-label="Lines">+103 &minus;2</td></tr>
+<tr><td data-label="Date">2026-08-23</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/50a7b87fd81a2456433576f314f51937f2e650a9">rider 2: the --child-jobs default reverts to keep -- share lost its own gate</a></td><td data-label="Files"><code>lib/compiler/build_runner.zig</code></td><td data-label="Lines">+40 &minus;8</td></tr>
+<tr><td data-label="Date">2026-08-23</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/8690a9c7befc1487b05978247412af4dd537cc18">InternPool: CaptureValue widening -- Index goes 30 -&gt; 31 bits, and the 32nd bit has an owner</a></td><td data-label="Files"><code>src/Air.zig</code>, <code>src/InternPool.zig</code></td><td data-label="Lines">+213 &minus;59</td></tr>
+<tr><td data-label="Date">2026-08-23</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/abcd7bbaee32c4a1db85ca2e5ca64cfa8ec79855">main: --time-report-json refuses --listen by name instead of silently writing nothing</a></td><td data-label="Files"><code>src/main.zig</code></td><td data-label="Lines">+13 &minus;0</td></tr>
+<tr><td data-label="Date">2026-08-23</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/0e91a799978966605719368519cb7db065136846">ThreadPlan: index_bits 30 -&gt; 31, and every published ceiling doubles with it</a></td><td data-label="Files"><code>src/ThreadPlan.zig</code></td><td data-label="Lines">+19 &minus;6</td></tr>
+<tr><td data-label="Date">2026-08-23</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/3669ffc7113f250e13b01c7d032ff09577729e26">ThreadPlan: a starved tid pool is now impossible to derive and refused when asked for</a></td><td data-label="Files"><code>src/ThreadPlan.zig</code>, <code>src/Zcu.zig</code>, <code>src/main.zig</code></td><td data-label="Lines">+205 &minus;18</td></tr>
+<tr><td data-label="Date">2026-09-06</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/d3347292c997c286cdd9dd5af037bf545ff9212a">Ready-set index and diagnostic release preparation</a></td><td data-label="Files"><code>src/InternPool.zig</code>, <code>src/Zcu.zig</code>, <code>src/Zcu/PerThread.zig</code> and 2 more</td><td data-label="Lines">+546 &minus;51</td></tr>
+<tr><td data-label="Date">2026-09-06</td><td data-label="Change"><a href="https://github.com/danielcamposramos/cgm-zig/commit/0399d2b19b71ed865cc2e6d5e21224f124e373db">Fix opt-in debug logging admission in safe compiler builds</a></td><td data-label="Files"><code>src/main.zig</code></td><td data-label="Lines">+20 &minus;7</td></tr>
+</tbody></table></div>
+</figure>
+
+<h2 id="checked">How it was checked</h2>
+<p>The repository keeps a verification harness of 38 rows that register themselves. After three defects in the harness were fixed without relaxing any row, its final table reads 22 green, 2 red, 9 unknown and 4 inconclusive. The two reds are the two features that ship off. The harness found the hang and the noisy report line above; neither was a row someone had queued. Source: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#f-documentation-and-partner-tooling-not-in-the-binary">(f) in the README</a>.</p>
+
+<h2 id="not-claimed">What is not claimed</h2>
+<ul>
+<li>No speed-up against any other configuration. The two compile-time figures above are wall-clock readings.</li>
+<li>The clean-machine cost acceptance for the newer candidate is <strong>unfulfilled</strong>, and the repository says no retroactive performance pass is given.</li>
+<li>Neither build is a portable Linux package: both need the system&rsquo;s LLVM and Clang 21.1 libraries.</li>
+<li>No change to the language, and none to the standard library beyond three additions (<code>std.Thread.Topology</code>, <code>Io.Threaded.concurrent_reserve</code> and <code>std.Build.Graph.child_jobs</code>) and one enum member, each with a stock-preserving default.</li>
+</ul>
+
+<h2 id="versions">Which Zig version</h2>
+<p>0.16.0 is the base and the patch target. Version 0.17 enters only after upstream promotes it to stable; the 0.17 development line failed on the motivating workload from language changes alone, before reaching the crash. Source: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#what-the-fork-does-not-change">README, &ldquo;What the fork does not change&rdquo;</a>.</p>
+</div>
+</main>
+<div class="noise-band" aria-hidden="true"></div>
+<footer class="site-footer">
+<div class="wrap">
+<div class="footer-logo"><img src="img/echosystems-logo-512.png" srcset="img/echosystems-logo-512.png 1x, img/echosystems-logo-1024.png 2x" width="512" height="495" alt="EchoSystems AI Studios logo"></div>
+<div>
+<p><strong>cgm-zig is provided to the world by EchoSystems AI Studios.</strong></p>
+<p>It is a fork of Zig 0.16.0 and is not the Zig project&rsquo;s. Zig is by the Zig contributors and is under the MIT licence. This site uses no Zig logo or mark.</p>
+<ul>
+<li><a href="https://github.com/danielcamposramos/cgm-zig">Repository</a></li>
+<li><a href="https://github.com/danielcamposramos/cgm-zig/releases">Releases</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.23309000">Cite it (DOI)</a></li>
+<li><a href="about.html#provenance">How it was made</a></li>
+<li><a href="https://echosystems.ai">echosystems.ai</a></li>
+</ul>
+</div>
+</div>
+</footer>
+</body>
+</html>

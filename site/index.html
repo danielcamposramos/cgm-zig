@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cgm-zig: Zig 0.16.0 that finishes very large builds</title>
+<meta name="description" content="A patched Zig 0.16.0 compiler for very large projects, provided by EchoSystems AI Studios. Free under the MIT licence.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="cgm-zig: Zig 0.16.0 that finishes very large builds">
+<meta property="og:description" content="A patched Zig 0.16.0 compiler for very large projects, provided by EchoSystems AI Studios. Free under the MIT licence.">
+<meta property="og:image" content="https://danielcamposramos.github.io/cgm-zig/img/social-card.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+<header class="site-header">
+<div class="wrap">
+<a class="brand" href="index.html"><img src="img/echosystems-symbol-128.png" width="40" height="40" alt="EchoSystems AI Studios symbol"><span>cgm-zig</span></a>
+<nav aria-label="Main"><ul class="nav"><li><a href="changes.html">What changes</a></li><li><a href="get.html">Get it</a></li><li><a href="about.html">About and credits</a></li></ul></nav>
+</div>
+</header>
+<main id="main">
+<div class="wrap">
+
+<section class="hero" aria-labelledby="top">
+<div class="hero-opening">
+<h1 id="top">cgm-zig</h1>
+<p class="lead">Build a very large Zig project with a compiler that finishes the job, and says plainly when it runs out of room.</p>
+</div>
+<figure class="hero-fact"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 418" role="img" aria-labelledby="build-result-title"><title id="build-result-title">With cgm-zig the same full build completes in under 45 minutes.</title><desc>completed in under 45 minutes, six full builds in a row without running out of memory</desc>
+<text class="diagram-label" x="32" y="46">cgm-zig</text>
+<text class="diagram-label" x="32" y="94">under</text>
+<text class="hero-number" x="26" y="200">45</text>
+<text class="diagram-label" x="240" y="194">minutes</text>
+<path class="diagram-rule" d="M32 229H448"/>
+<g class="build-checks">
+<rect class="diagram-node" x="32" y="256" width="56" height="56" rx="8"/><path class="diagram-check" d="M46 284l9 9 19-22"/>
+<rect class="diagram-node" x="104" y="256" width="56" height="56" rx="8"/><path class="diagram-check" d="M118 284l9 9 19-22"/>
+<rect class="diagram-node" x="176" y="256" width="56" height="56" rx="8"/><path class="diagram-check" d="M190 284l9 9 19-22"/>
+<rect class="diagram-node" x="248" y="256" width="56" height="56" rx="8"/><path class="diagram-check" d="M262 284l9 9 19-22"/>
+<rect class="diagram-node" x="320" y="256" width="56" height="56" rx="8"/><path class="diagram-check" d="M334 284l9 9 19-22"/>
+<rect class="diagram-node" x="392" y="256" width="56" height="56" rx="8"/><path class="diagram-check" d="M406 284l9 9 19-22"/>
+</g>
+<text class="diagram-label" x="32" y="352">six full builds in a row</text>
+<text class="diagram-label" x="32" y="386">without running out of memory</text>
+</svg></figure>
+<div class="hero-detail">
+<p>On a project of about 1,800 modules, stock Zig 0.16.0 died silently after more than two hours, every time. With cgm-zig the same full build completes in under 45 minutes.</p>
+<p class="status"><strong>Status:</strong> a toolchain for 64-bit Linux is released, and a newer build is published as a prerelease, to try out before relying on it. Every number on this site comes from the repository&rsquo;s own record, linked beside it.</p>
+<div class="actions">
+<a class="btn" href="get.html">Get the toolchain</a>
+<a class="btn secondary" href="changes.html">See what changes</a>
+</div>
+</div>
+
+</section>
+
+<figure class="bars" aria-labelledby="fig-title">
+<h2 id="fig-title">The same build, two compilers</h2>
+<div class="bar-row">
+<div class="bar-label"><strong>Stock Zig 0.16.0</strong><span>silent crash after more than 2 hours, every time</span></div>
+<svg class="diagram time-diagram" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 72" role="img" aria-labelledby="stock-time-title"><title id="stock-time-title">On a project of about 1,800 modules, stock Zig 0.16.0 died silently after more than two hours, every time.</title>
+<path class="time-axis" d="M16 52H448M16 43V61M448 43V61"/>
+<path class="time-stock" d="M16 30H472"/><path class="time-stock-arrow" d="M458 18l14 12-14 12"/>
+<path class="time-bound" d="M448 18V62"/>
+
+</svg>
+</div>
+<div class="bar-row">
+<div class="bar-label"><strong>cgm-zig 0.16.0+cgm.046d6833</strong><span>completed in under 45 minutes, six full builds in a row without running out of memory</span></div>
+<svg class="diagram time-diagram" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 72" role="img" aria-labelledby="completed-time-title"><title id="completed-time-title">With cgm-zig the same full build completes in under 45 minutes.</title>
+<path class="time-axis" d="M16 52H448M16 43V61M448 43V61"/>
+<path class="time-range" d="M20 30H172"/>
+<path class="time-fork" d="M169 30H30m14-12L30 30l14 12"/>
+<circle class="time-open" cx="178" cy="30" r="6"/>
+<path class="time-bound" d="M178 43V61"/>
+
+</svg>
+</div>
+<figcaption>The bars share one scale: the full width is 2 hours. The workload is about 1,800 named modules, about 2,300 files, analysed as one compilation unit. The times are the maintainer&rsquo;s build station&rsquo;s own timestamps from 2026-08-30. They are a wall-clock reading, not a speed claim against any other setup. Sources: the <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#why-this-fork-exists">README</a> and the <a href="https://github.com/danielcamposramos/cgm-zig/releases/tag/0.16.0%2Bcgm.046d6833">release notes</a>.</figcaption>
+</figure>
+
+<h2 id="why">Why it exists</h2>
+<p>Zig&rsquo;s compiler keeps its work in tables addressed by 32-bit indexes. On a project this large, an empty-slot marker was read as a real index and the compiler died with no message at all. Stock release builds leave out the check that would have named the problem.</p>
+<p>cgm-zig keeps that check, so running out of room now stops with a message that names the thread, the index reached and the limit. It also raises the limit it was hitting, from 67,108,863 to 134,217,727 items per partition. The details, with the files and commits, are on <a href="changes.html">What changes</a>.</p>
+<div class="visual-pair">
+<figure class="fact-figure"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 378" role="img" aria-labelledby="index-address-title"><title id="index-address-title">Zig’s compiler keeps its work in tables addressed by 32-bit indexes.</title>
+<rect class="diagram-node" x="24" y="22" width="432" height="64" rx="6"/>
+<text class="diagram-label" x="240" y="63" text-anchor="middle">32-bit indexes</text>
+<path class="diagram-arrow" d="M240 90V112H186V140m-10-12 10 12 10-12"/>
+<g class="table-slots"><path class="diagram-rule" d="M24 152H456V216H24ZM132 152V216M240 152V216M348 152V216"/>
+<rect class="diagram-selected" x="132" y="152" width="108" height="64"/>
+<path class="diagram-check" d="M166 182l12 12 25-28"/></g>
+<text class="diagram-label" x="24" y="257">tables</text>
+<rect class="diagram-warning" x="24" y="294" width="432" height="60" rx="6"/>
+<text class="diagram-label" x="240" y="332" text-anchor="middle">empty-slot marker</text>
+<path class="diagram-warning-line" d="M240 294V236m-9 9 18-18m-18 0 18 18"/>
+</svg></figure>
+<figure class="fact-figure"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 378" role="img" aria-labelledby="index-limits-title"><title id="index-limits-title">It also raises the limit it was hitting, from 67,108,863 to 134,217,727 items per partition.</title>
+<text class="diagram-label" x="24" y="42">items per partition</text>
+<text class="diagram-number" x="24" y="99">67,108,863</text>
+<rect class="diagram-old-limit" x="24" y="122" width="216" height="30"/>
+<path class="diagram-rule" d="M240 115V159"/>
+<path class="diagram-arrow" d="M44 178V220m-10-12 10 12 10-12"/>
+<text class="diagram-number" x="24" y="274">134,217,727</text>
+<rect class="diagram-new-limit" x="24" y="297" width="432" height="30"/>
+<path class="diagram-rule" d="M456 290V334"/>
+</svg></figure>
+</div>
+<p>It changes nothing in the language. Every new behaviour sits behind a new flag, and a stock invocation behaves like stock Zig.</p>
+
+<figure data-extra="build-timings"><!-- Build timings per release, with workload and measurement bounds. -->
+<figcaption>The runs the repository records, each with its workload. They are wall-clock readings on the maintainer&rsquo;s build station; the rows are different workloads and are not compared with each other.</figcaption>
+<div class="table-wrap" role="region" aria-label="Recorded runs" tabindex="0"><table><caption>Recorded runs</caption><thead><tr><th scope="col">Compiler</th><th scope="col">Workload</th><th scope="col">What the record shows</th><th scope="col">Source</th></tr></thead><tbody>
+<tr><td data-label="Compiler">Stock Zig 0.16.0</td><td data-label="Workload">The full build of about 1,800 modules, as one compilation unit</td><td data-label="What the record shows">Died silently after more than two hours, every time</td><td data-label="Source"><a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#why-this-fork-exists">README</a></td></tr>
+<tr><td data-label="Compiler">cgm-zig 0.16.0+cgm.046d6833</td><td data-label="Workload">The same full build</td><td data-label="What the record shows">Completed in under 45 minutes, six full builds in a row without running out of memory</td><td data-label="Source"><a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#why-this-fork-exists">README</a></td></tr>
+<tr><td data-label="Compiler">cgm-zig at commit a7f31c36</td><td data-label="Workload">The same workload, the run in which the named message fired twice</td><td data-label="What the record shows">Completed, exit 0, in 18 min 10 s with an 18.4 GiB peak</td><td data-label="Source"><a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#a-the-frontend-crash-becomes-a-named-refusal">README, (a)</a></td></tr>
+<tr><td data-label="Compiler">Building cgm-zig itself</td><td data-label="Workload">A clean build of the compiler under an 8-CPU mask on a busy host</td><td data-label="What the record shows">About 41 minutes; 8 to 9 minutes on an idle, unconstrained host</td><td data-label="Source"><a href="https://github.com/danielcamposramos/cgm-zig/blob/main/docs/crown/BUILDING.md">BUILDING.md</a></td></tr>
+</tbody></table></div>
+</figure>
+
+<h2 id="doors">Where to go next</h2>
+<ul class="doors">
+<li><a href="changes.html">Build very large projects</a><p>What each patch does, what was measured, and what was not.</p></li>
+<li><a href="get.html">Use the compiler</a><p>The released builds, how to check and install one, and how to build it yourself.</p></li>
+<li><a href="about.html">Check where it comes from</a><p>Who provides it, the credit to Zig, the licence, how to cite it, and its provenance.</p></li>
+</ul>
+</div>
+</main>
+<div class="noise-band" aria-hidden="true"></div>
+<footer class="site-footer">
+<div class="wrap">
+<div class="footer-logo"><img src="img/echosystems-logo-512.png" srcset="img/echosystems-logo-512.png 1x, img/echosystems-logo-1024.png 2x" width="512" height="495" alt="EchoSystems AI Studios logo"></div>
+<div>
+<p><strong>cgm-zig is provided to the world by EchoSystems AI Studios.</strong></p>
+<p>It is a fork of Zig 0.16.0 and is not the Zig project&rsquo;s. Zig is by the Zig contributors and is under the MIT licence. This site uses no Zig logo or mark.</p>
+<ul>
+<li><a href="https://github.com/danielcamposramos/cgm-zig">Repository</a></li>
+<li><a href="https://github.com/danielcamposramos/cgm-zig/releases">Releases</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.23309000">Cite it (DOI)</a></li>
+<li><a href="about.html#provenance">How it was made</a></li>
+<li><a href="https://echosystems.ai">echosystems.ai</a></li>
+</ul>
+</div>
+</div>
+</footer>
+</body>
+</html>

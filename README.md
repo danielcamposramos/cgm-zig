@@ -2,6 +2,8 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23309000.svg)](https://doi.org/10.5281/zenodo.23309000)
 
+**Website:** https://danielcamposramos.github.io/cgm-zig/
+
 > *"This repository exists to deposit AI garbage that actually makes Zig better and
 > works with hyper-modular code."*
 > — Daniel Campos Ramos, founder, EchoSystems AI Studios, 2026-08-22
