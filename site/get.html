@@ -46,6 +46,17 @@
 <div class="note">
 <p><strong>Before you start:</strong> the toolchain is not a static program. It needs the shared LLVM and Clang 21.1 libraries (<code>libclang-cpp.so.21.1</code> and <code>libLLVM.so.21.1</code>). Without them, <code>zig</code> stops at start-up with &ldquo;error while loading shared libraries&rdquo;. On Debian testing, <code>sudo apt install libclang-cpp21</code> brings both; on another system, install the packages that provide those two files.</p>
 </div>
+<figure class="fact-figure install-map"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 556" role="img" aria-labelledby="install-path-title"><title id="install-path-title">Download a released toolchain for 64-bit Linux, check its checksum, and point zig at it.</title>
+<path class="diagram-rule" d="M48 64V466"/>
+<g class="diagram-node"><rect x="24" y="24" width="48" height="48" rx="4"/><rect x="24" y="126" width="48" height="48" rx="4"/><rect x="24" y="228" width="48" height="48" rx="4"/><rect x="24" y="330" width="48" height="48" rx="4"/><rect x="24" y="432" width="48" height="48" rx="4"/></g>
+<path class="diagram-check" d="M48 34v25m-10-10 10 10 10-10M35 150l9 9 18-22M35 252h26m-26 8h26M35 354h26m-10-10 10 10-10 10M35 456l9 9 18-22"/>
+<text class="diagram-label" x="96" y="55">Download</text>
+<text class="diagram-label" x="96" y="157">check its checksum</text>
+<text class="diagram-label" x="96" y="259">extract it</text>
+<text class="diagram-code" x="96" y="361">~/.local/bin/zig</text>
+<text class="diagram-code" x="96" y="463">zig version</text>
+<text class="diagram-number" x="96" y="521">0.16.0</text>
+</svg></figure>
 <p>The archive is 126 MB. Its SHA-256 is <code>de6fb2ae924536f1a7b2eb085f5a3fa2e74c48fe4cbc2ba28b397647729faa36</code>.</p>
 <pre><code>curl -LO https://repo.sparkyos.org/builds/cgm-zig/0.16.0%2Bcgm.046d6833/cgm-zig-x86_64-linux-0.16.0+cgm.046d6833.tar.xz
 echo "de6fb2ae924536f1a7b2eb085f5a3fa2e74c48fe4cbc2ba28b397647729faa36  cgm-zig-x86_64-linux-0.16.0+cgm.046d6833.tar.xz" | sha256sum -c

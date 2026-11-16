@@ -34,24 +34,80 @@
 <p>&ldquo;Ships off&rdquo; means the change is in the build but only runs when you ask for it, because its own measurement came out slower.</p>
 
 <h2 id="crash">A crash becomes a named message</h2>
+<div class="patch-section">
+<figure class="fact-figure patch-map"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 230" role="img" aria-labelledby="crash-map-title"><title id="crash-map-title">The index grows from 30 to 31 bits, and the limit the report line prints grows with it.</title>
+<path class="diagram-rule" d="M28 32V181"/>
+<path class="diagram-arrow" d="M28 55H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="57">assert</text>
+<text class="diagram-detail" x="68" y="91">message</text>
+<path class="diagram-arrow" d="M28 153H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="155">30 to 31 bits</text>
+<text class="diagram-detail" x="68" y="189">67,108,863 to 134,217,727</text>
+
+</svg></figure>
 <div class="table-wrap" role="region" aria-label="Crash and index limit" tabindex="0"><table><caption>Crash and index limit</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
 <tr><td data-label="Change">Running out of room in the compiler&rsquo;s index table stops with a message naming the thread, the index reached, the limit and the remedy. Stock Zig has only an <code>assert</code>, which release builds remove.</td><td data-label="What the record shows">Fired live in production twice. The 1,800-module workload then completed where every stock compiler died: exit 0, 18 min 10 s, 18.4 GiB peak (commit <code>a7f31c36</code>).</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 <tr><td data-label="Change">The index grows from 30 to 31 bits, and the limit the report line prints grows with it.</td><td data-label="What the record shows">The per-partition ceiling goes from 67,108,863 to 134,217,727. The plan predicted 4 times; the tree measured 2 times, and the correction is recorded where the prediction was made. The functional suite matched its control: identical failure sets, none unique to this tree.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 </tbody></table></div>
+</div>
 
 <p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#a-the-frontend-crash-becomes-a-named-refusal">(a) in the README</a>.</p>
 
 <h2 id="diagnostics">Messages and reports that name the thing</h2>
+<div class="patch-section">
+<figure class="fact-figure patch-map"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 426" role="img" aria-labelledby="diagnostics-map-title"><title id="diagnostics-map-title">The error for a file owned by two modules names that file, not whichever importer was scanned first.</title>
+<path class="diagram-rule" d="M28 32V377"/>
+<path class="diagram-arrow" d="M28 55H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="57">mod_b.zig:1:1</text>
+<text class="diagram-detail" x="68" y="91">dupe.zig:1:1</text>
+<path class="diagram-arrow" d="M28 153H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="155">-femit-module-graph</text>
+<text class="diagram-detail" x="68" y="189">JSON before any analysis</text>
+<path class="diagram-arrow" d="M28 251H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="253">--time-report-json</text>
+<text class="diagram-detail" x="68" y="287">time report to a file</text>
+<path class="diagram-arrow" d="M28 349H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="351">--listen</text>
+<text class="diagram-detail" x="68" y="385">stays quiet</text>
+
+</svg></figure>
 <div class="table-wrap" role="region" aria-label="Diagnostics" tabindex="0"><table><caption>Diagnostics</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
 <tr><td data-label="Change">The error for a file owned by two modules names that file, not whichever importer was scanned first.</td><td data-label="What the record shows">Before: <code>mod_b.zig:1:1</code>. After: <code>dupe.zig:1:1</code>. Two test snapshots that had pinned the wrong text are tightened, not weakened.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 <tr><td data-label="Change"><code>-femit-module-graph</code> writes the resolved module graph as JSON before any analysis.</td><td data-label="What the record shows">Stock invocations are byte-identical. Effect on a real workload: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 <tr><td data-label="Change"><code>--time-report-json &lt;path&gt;</code> writes the time report to a file, without needing a live listener.</td><td data-label="What the record shows">It made one finding measurable: the linker&rsquo;s CPU time was 11.2 times its wall time, so it ran beside analysis.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 <tr><td data-label="Change">The thread-plan report line stays quiet under <code>--listen</code>, as <code>--time-report</code> already does.</td><td data-label="What the record shows">A green <code>zig build</code> of a 13-step fixture went from 6 error lines to 0.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 </tbody></table></div>
+</div>
 
 <p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#b-diagnostics-that-name-the-thing">(b) in the README</a>.</p>
 
 <h2 id="threads">Threading and ordering</h2>
+<div class="patch-section">
+<figure class="fact-figure patch-map"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 720" role="img" aria-labelledby="threads-map-title"><title id="threads-map-title">The worker count is separated from the number of index partitions, so -j moves workers and leaves the limit alone.</title>
+<path class="diagram-rule" d="M28 32V671"/>
+<path class="diagram-arrow" d="M28 55H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="57">std.Thread.Topology</text>
+<text class="diagram-detail" x="68" y="91">physical cores and SMT siblings</text>
+<path class="diagram-arrow" d="M28 153H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="155">-j</text>
+<text class="diagram-detail" x="68" y="189">number of index partitions</text>
+<path class="diagram-arrow" d="M28 251H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="253">--step-order</text>
+<text class="diagram-detail" x="68" y="287">layered order by default</text>
+<path class="diagram-arrow" d="M28 349H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="351">--analysis-order=layered</text>
+<text class="diagram-detail" x="68" y="385">Ships off</text>
+<path class="diagram-arrow" d="M28 447H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="449">reserve of slots</text>
+<text class="diagram-detail" x="68" y="483">linker</text>
+<path class="diagram-arrow" d="M28 545H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="547">--child-jobs=keep|share|N</text>
+<text class="diagram-detail" x="68" y="581">Default keep</text>
+<path class="diagram-arrow" d="M28 643H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="645">thread-id pool</text>
+<text class="diagram-detail" x="68" y="679">refused by name</text>
+
+</svg></figure>
 <div class="table-wrap" role="region" aria-label="Threading" tabindex="0"><table><caption>Threading</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
 <tr><td data-label="Change"><code>std.Thread.Topology</code> reads physical cores and SMT siblings, limited to the cores the process may use. Unknown stays unknown: never guessed as 1 or half the logical count.</td><td data-label="What the record shows">7 of 7 test masks match the sysfs reference. The affinity sabotage control: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 <tr><td data-label="Change">The worker count is separated from the number of index partitions, so <code>-j</code> moves workers and leaves the limit alone.</td><td data-label="What the record shows"><code>-j1</code> gives 8 partitions. 1,200 files at <code>-j64</code> give the same result as <code>-j1</code>. On a 6-core, 12-thread host the derived limit is 4.00 times the crash&rsquo;s ceiling, derived from constants; the real workload&rsquo;s reproduction is <strong>not yet measured</strong> in the harness. Race freedom is read and type verified only, and named as a residual.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
@@ -61,17 +117,35 @@
 <tr><td data-label="Change"><code>zig build --child-jobs=keep|share|N</code> passes <code>-j</code> to child compilers. Default <code>keep</code>.</td><td data-label="What the record shows"><code>share</code> cut peak worker threads from 35 to 10 but was 6.55% slower in 3 of 3 paired runs, so the default stays <code>keep</code>. A small fixture is where <code>share</code> costs most; a large project could invert it.</td><td data-label="Status"><span class="tag off"><code>share</code> ships off</span></td></tr>
 <tr><td data-label="Change">A hang the patch set itself caused (a starved thread-id pool) is refused by name.</td><td data-label="What the record shows">Found by the harness and fixed in the same run: 0 hangs in 6 configurations, where the first build hung.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 </tbody></table></div>
+</div>
 
 <p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#c-threading-and-topology">(c) in the README</a>.</p>
 
 <h2 id="tooling">Checks before compiling</h2>
+<div class="patch-section">
+<figure class="fact-figure patch-map"><svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 328" role="img" aria-labelledby="tooling-map-title"><title id="tooling-map-title">Without the flag, output is byte-identical to upstream.</title>
+<path class="diagram-rule" d="M28 32V279"/>
+<path class="diagram-arrow" d="M28 55H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="57">ast-check --module-graph</text>
+<text class="diagram-detail" x="68" y="91">file’s imports</text>
+<path class="diagram-arrow" d="M28 153H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="155">ast-check</text>
+<text class="diagram-detail" x="68" y="189">many files at once</text>
+<path class="diagram-arrow" d="M28 251H54m-8-7 8 7-8 7"/>
+<text class="diagram-code" x="68" y="253">Compilation.resolveEmitPath</text>
+<text class="diagram-detail" x="68" y="287">pub</text>
+
+</svg></figure>
 <div class="table-wrap" role="region" aria-label="Pre-compile tooling" tabindex="0"><table><caption>Pre-compile tooling</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
 <tr><td data-label="Change"><code>zig ast-check --module-graph=&lt;path&gt; file.zig</code> checks a file&rsquo;s imports against the module graph and ends with one summary you can reconcile.</td><td data-label="What the record shows">Without the flag, output is byte-identical to upstream. Effect on a workload: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 <tr><td data-label="Change"><code>zig ast-check</code> takes many files at once, with a machine-readable <code>--json</code> report.</td><td data-label="What the record shows">Memory stays flat: 400 files at 7.6 MB. Beyond that: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 <tr><td data-label="Change">One word: <code>Compilation.resolveEmitPath</code> becomes <code>pub</code>, because the module graph code calls it from another file.</td><td data-label="What the record shows">After the fix the type check reports 0 errors and the stage 3 build exits 0.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
 </tbody></table></div>
+</div>
 
 <p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#d-pre-compile-tooling">(d)</a> and <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#e-a-one-word-visibility-fix-on-upstream-code">(e) in the README</a>.</p>
+
+<figure data-extra="patch-files"><!-- Patch list with its files and the recorded index limits. --></figure>
 
 <h2 id="checked">How it was checked</h2>
 <p>The repository keeps a verification harness of 38 rows that register themselves. After three defects in the harness were fixed without relaxing any row, its final table reads 22 green, 2 red, 9 unknown and 4 inconclusive. The two reds are the two features that ship off. The harness found the hang and the noisy report line above; neither was a row someone had queued. Source: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#f-documentation-and-partner-tooling-not-in-the-binary">(f) in the README</a>.</p>

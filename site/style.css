@@ -176,3 +176,58 @@ dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 @media print { .site-header, .noise-band, .actions { display: none; } }
+
+/* Figures repeat the page's recorded facts; shared roles follow the reader's theme. */
+:root { --measure: calc(1200px + 2 * var(--gutter)); }
+@media (min-width: 64rem) { html { font-size: 18px; } }
+.hero { grid-template-columns: 1fr 1fr; column-gap: var(--space-12); row-gap: var(--space-4); align-items: start; }
+.hero-opening { grid-column: 1; grid-row: 1; }
+.hero-opening .lead { margin-bottom: 0; }
+.hero-detail { grid-column: 1; grid-row: 2; }
+.hero-fact { grid-column: 2; grid-row: 1 / span 2; margin: 0; background: var(--surface); border-top: 4px solid var(--accent); }
+.diagram { display: block; width: 100%; height: auto; color: var(--heading); font-family: Verdana, "DejaVu Sans", Geneva, sans-serif; }
+.diagram text { fill: var(--heading); }
+.diagram-label { font-size: 26px; }
+.diagram-detail { font-size: 23px; }
+.diagram-code { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 23px; }
+.diagram-number { font-size: 40px; font-weight: 700; letter-spacing: -1px; }
+.hero-number { font-size: 142px; font-weight: 700; letter-spacing: -8px; }
+.diagram-rule, .diagram-arrow { fill: none; stroke: var(--muted); stroke-width: 2; }
+.diagram-node { fill: var(--bg); stroke: var(--accent); stroke-width: 2; }
+.diagram-selected, .diagram-new-limit { fill: var(--bar); }
+.diagram-selected + .diagram-check { stroke: var(--btn-text); }
+.diagram-check { fill: none; stroke: var(--accent); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.diagram-warning { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 4; }
+.diagram-warning-line { fill: none; stroke: var(--warn); stroke-width: 3; }
+.diagram-old-limit { fill: var(--warn); }
+.fact-figure { margin: var(--space-6) 0; padding: var(--space-4); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; }
+.visual-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-6); }
+.visual-pair .fact-figure { margin-block: var(--space-4); }
+.time-diagram { height: 72px; }
+.time-axis { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.time-stock { fill: none; stroke: var(--warn); stroke-width: 6; stroke-dasharray: 9 4; }
+.time-stock-arrow { fill: none; stroke: var(--warn); stroke-width: 6; }
+.time-fork { fill: none; stroke: var(--bar); stroke-width: 6; }
+.time-bound { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 3 3; }
+.time-range { fill: none; stroke: var(--bar); stroke-width: 12; stroke-dasharray: 1 5; }
+.time-open { fill: var(--surface); stroke: var(--bar); stroke-width: 3; }
+.patch-section { display: grid; grid-template-columns: minmax(330px, .8fr) minmax(0, 1.6fr); gap: var(--space-6); align-items: start; }
+.patch-map { margin: 0; padding: var(--space-2); }
+.patch-section table { min-width: 0; }
+.patch-section th, .patch-section td { padding: var(--space-4); }
+.install-map { max-width: 520px; float: right; width: 43%; margin: 0 0 var(--space-6) var(--space-8); }
+.source-map { max-width: 560px; margin-inline: auto; }
+figure[data-extra] { margin: var(--space-8) 0; padding: var(--space-8); border: 1px solid var(--line); border-top: 4px solid var(--accent); background: var(--surface); }
+figure[data-extra]:not(:has(> :not(template))) { display: none; }
+@media (max-width: 64rem) {
+  .patch-section { grid-template-columns: 1fr; }
+  .patch-map { max-width: 600px; }
+}
+@media (max-width: 52rem) {
+  .hero { grid-template-columns: 1fr; gap: var(--space-6); }
+  .hero-opening, .hero-detail, .hero-fact { grid-column: auto; grid-row: auto; }
+  .hero-fact { width: 100%; max-width: 520px; }
+  .visual-pair { grid-template-columns: 1fr; }
+  .install-map { float: none; width: 100%; margin: var(--space-6) 0; }
+  .fact-figure { padding: var(--space-2); }
+}

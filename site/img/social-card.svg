@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="social-title">
+<title id="social-title">With cgm-zig the same full build completes in under 45 minutes.</title>
+<rect width="1200" height="630" fill="#FDFDFD"/>
+<rect width="1200" height="8" fill="#264653"/>
+<g font-family="Verdana, DejaVu Sans, sans-serif" fill="#264653">
+<text x="64" y="122" font-size="68" font-weight="700">cgm-zig</text>
+<text x="64" y="190" font-size="29">Build a very large Zig project with a compiler</text>
+<text x="64" y="230" font-size="29">that finishes the job, and says plainly</text>
+<text x="64" y="270" font-size="29">when it runs out of room.</text>
+<text x="64" y="339" font-size="27">under</text>
+<text x="58" y="464" font-size="142" font-weight="700">45</text>
+<text x="267" y="461" font-size="34">minutes</text>
+<text x="552" y="435" font-size="25">six full builds in a row</text>
+<text x="552" y="474" font-size="25">without running out of memory</text>
+<text x="64" y="576" font-size="22">cgm-zig is provided to the world by EchoSystems AI Studios.</text>
+</g>
+<image x="948" y="55" width="190" height="183.69140625" href="echosystems-logo-512.png"/>
+<g fill="#EEF3F5" stroke="#264653" stroke-width="2">
+<rect x="552" y="334" width="52" height="52" rx="6"/><rect x="626" y="334" width="52" height="52" rx="6"/>
+<rect x="700" y="334" width="52" height="52" rx="6"/><rect x="774" y="334" width="52" height="52" rx="6"/>
+<rect x="848" y="334" width="52" height="52" rx="6"/><rect x="922" y="334" width="52" height="52" rx="6"/>
+</g>
+<path d="M565 360l9 9 18-21M639 360l9 9 18-21M713 360l9 9 18-21M787 360l9 9 18-21M861 360l9 9 18-21M935 360l9 9 18-21" fill="none" stroke="#264653" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
