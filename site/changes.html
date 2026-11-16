@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What changes: cgm-zig patches and what was measured</title>
+<meta name="description" content="Each cgm-zig patch on Zig 0.16.0 in plain words, with the measured result the repository records and what was not measured.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="What changes: cgm-zig patches and what was measured">
+<meta property="og:description" content="Each cgm-zig patch on Zig 0.16.0 in plain words, with the measured result the repository records and what was not measured.">
+<meta property="og:image" content="img/social-card.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+<header class="site-header">
+<div class="wrap">
+<a class="brand" href="index.html"><img src="img/echosystems-symbol-128.png" width="40" height="40" alt="EchoSystems AI Studios symbol"><span>cgm-zig</span></a>
+<nav aria-label="Main"><ul class="nav"><li><a href="changes.html" aria-current="page">What changes</a></li><li><a href="get.html">Get it</a></li><li><a href="about.html">About and credits</a></li></ul></nav>
+</div>
+</header>
+<main id="main">
+<div class="wrap">
+
+<p class="crumbs"><a href="index.html">cgm-zig</a> / What changes</p>
+<h1>What changes</h1>
+<p class="lead">cgm-zig is a patch set on Zig 0.16.0. Every new compiler behaviour sits behind a new flag, so a stock invocation behaves like stock Zig.</p>
+<p>The rows below are drawn from the repository&rsquo;s commit messages and verification records. Where the record holds no measurement of a change&rsquo;s effect, the row says <strong>not yet measured</strong> and does not claim one. The full table, with every file and commit, is in the <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#what-differs-from-upstream-zig-0160">README</a>.</p>
+<p>&ldquo;Ships off&rdquo; means the change is in the build but only runs when you ask for it, because its own measurement came out slower.</p>
+
+<h2 id="crash">A crash becomes a named message</h2>
+<div class="table-wrap" role="region" aria-label="Crash and index limit" tabindex="0"><table><caption>Crash and index limit</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
+<tr><td data-label="Change">Running out of room in the compiler&rsquo;s index table stops with a message naming the thread, the index reached, the limit and the remedy. Stock Zig has only an <code>assert</code>, which release builds remove.</td><td data-label="What the record shows">Fired live in production twice. The 1,800-module workload then completed where every stock compiler died: exit 0, 18 min 10 s, 18.4 GiB peak (commit <code>a7f31c36</code>).</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change">The index grows from 30 to 31 bits, and the limit the report line prints grows with it.</td><td data-label="What the record shows">The per-partition ceiling goes from 67,108,863 to 134,217,727. The plan predicted 4 times; the tree measured 2 times, and the correction is recorded where the prediction was made. The functional suite matched its control: identical failure sets, none unique to this tree.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+</tbody></table></div>
+
+<p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#a-the-frontend-crash-becomes-a-named-refusal">(a) in the README</a>.</p>
+
+<h2 id="diagnostics">Messages and reports that name the thing</h2>
+<div class="table-wrap" role="region" aria-label="Diagnostics" tabindex="0"><table><caption>Diagnostics</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
+<tr><td data-label="Change">The error for a file owned by two modules names that file, not whichever importer was scanned first.</td><td data-label="What the record shows">Before: <code>mod_b.zig:1:1</code>. After: <code>dupe.zig:1:1</code>. Two test snapshots that had pinned the wrong text are tightened, not weakened.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change"><code>-femit-module-graph</code> writes the resolved module graph as JSON before any analysis.</td><td data-label="What the record shows">Stock invocations are byte-identical. Effect on a real workload: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change"><code>--time-report-json &lt;path&gt;</code> writes the time report to a file, without needing a live listener.</td><td data-label="What the record shows">It made one finding measurable: the linker&rsquo;s CPU time was 11.2 times its wall time, so it ran beside analysis.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change">The thread-plan report line stays quiet under <code>--listen</code>, as <code>--time-report</code> already does.</td><td data-label="What the record shows">A green <code>zig build</code> of a 13-step fixture went from 6 error lines to 0.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+</tbody></table></div>
+
+<p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#b-diagnostics-that-name-the-thing">(b) in the README</a>.</p>
+
+<h2 id="threads">Threading and ordering</h2>
+<div class="table-wrap" role="region" aria-label="Threading" tabindex="0"><table><caption>Threading</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
+<tr><td data-label="Change"><code>std.Thread.Topology</code> reads physical cores and SMT siblings, limited to the cores the process may use. Unknown stays unknown: never guessed as 1 or half the logical count.</td><td data-label="What the record shows">7 of 7 test masks match the sysfs reference. The affinity sabotage control: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change">The worker count is separated from the number of index partitions, so <code>-j</code> moves workers and leaves the limit alone.</td><td data-label="What the record shows"><code>-j1</code> gives 8 partitions. 1,200 files at <code>-j64</code> give the same result as <code>-j1</code>. On a 6-core, 12-thread host the derived limit is 4.00 times the crash&rsquo;s ceiling, derived from constants; the real workload&rsquo;s reproduction is <strong>not yet measured</strong> in the harness. Race freedom is read and type verified only, and named as a residual.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change">Build steps run in layered order by default (<code>--step-order</code>).</td><td data-label="What the record shows">13 steps: 3.567 s layered, 3.631 s random, 3.760 s declared. A weak result, inside the noise against random.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change"><code>--analysis-order=layered</code>, a priority over work that would be analysed anyway.</td><td data-label="What the record shows">+6.59% slower than insertion order in 3 of 3 paired runs, so it stays off. The new optional index behind it has no end-to-end timing yet.</td><td data-label="Status"><span class="tag off">Ships off</span></td></tr>
+<tr><td data-label="Change">A reserve of slots keeps the linker from being starved by bulk work.</td><td data-label="What the record shows">0 of 881 thread samples were parked waiting. The deliberate-failure controls: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change"><code>zig build --child-jobs=keep|share|N</code> passes <code>-j</code> to child compilers. Default <code>keep</code>.</td><td data-label="What the record shows"><code>share</code> cut peak worker threads from 35 to 10 but was 6.55% slower in 3 of 3 paired runs, so the default stays <code>keep</code>. A small fixture is where <code>share</code> costs most; a large project could invert it.</td><td data-label="Status"><span class="tag off"><code>share</code> ships off</span></td></tr>
+<tr><td data-label="Change">A hang the patch set itself caused (a starved thread-id pool) is refused by name.</td><td data-label="What the record shows">Found by the harness and fixed in the same run: 0 hangs in 6 configurations, where the first build hung.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+</tbody></table></div>
+
+<p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#c-threading-and-topology">(c) in the README</a>.</p>
+
+<h2 id="tooling">Checks before compiling</h2>
+<div class="table-wrap" role="region" aria-label="Pre-compile tooling" tabindex="0"><table><caption>Pre-compile tooling</caption><thead><tr><th scope="col">Change</th><th scope="col">What the record shows</th><th scope="col">Status</th></tr></thead><tbody>
+<tr><td data-label="Change"><code>zig ast-check --module-graph=&lt;path&gt; file.zig</code> checks a file&rsquo;s imports against the module graph and ends with one summary you can reconcile.</td><td data-label="What the record shows">Without the flag, output is byte-identical to upstream. Effect on a workload: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change"><code>zig ast-check</code> takes many files at once, with a machine-readable <code>--json</code> report.</td><td data-label="What the record shows">Memory stays flat: 400 files at 7.6 MB. Beyond that: <strong>not yet measured</strong>.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+<tr><td data-label="Change">One word: <code>Compilation.resolveEmitPath</code> becomes <code>pub</code>, because the module graph code calls it from another file.</td><td data-label="What the record shows">After the fix the type check reports 0 errors and the stage 3 build exits 0.</td><td data-label="Status"><span class="tag">In the promoted build</span></td></tr>
+</tbody></table></div>
+
+<p>Source rows: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#d-pre-compile-tooling">(d)</a> and <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#e-a-one-word-visibility-fix-on-upstream-code">(e) in the README</a>.</p>
+
+<h2 id="checked">How it was checked</h2>
+<p>The repository keeps a verification harness of 38 rows that register themselves. After three defects in the harness were fixed without relaxing any row, its final table reads 22 green, 2 red, 9 unknown and 4 inconclusive. The two reds are the two features that ship off. The harness found the hang and the noisy report line above; neither was a row someone had queued. Source: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#f-documentation-and-partner-tooling-not-in-the-binary">(f) in the README</a>.</p>
+
+<h2 id="not-claimed">What is not claimed</h2>
+<ul>
+<li>No speed-up against any other configuration. The two compile-time figures above are wall-clock readings.</li>
+<li>The clean-machine cost acceptance for the newer candidate is <strong>unfulfilled</strong>, and the repository says no retroactive performance pass is given.</li>
+<li>Neither build is a portable Linux package: both need the system&rsquo;s LLVM and Clang 21.1 libraries.</li>
+<li>No change to the language, and none to the standard library beyond three additions (<code>std.Thread.Topology</code>, <code>Io.Threaded.concurrent_reserve</code> and <code>std.Build.Graph.child_jobs</code>) and one enum member, each with a stock-preserving default.</li>
+</ul>
+
+<h2 id="versions">Which Zig version</h2>
+<p>0.16.0 is the base and the patch target. Version 0.17 enters only after upstream promotes it to stable; the 0.17 development line failed on the motivating workload from language changes alone, before reaching the crash. Source: <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.md#what-the-fork-does-not-change">README, &ldquo;What the fork does not change&rdquo;</a>.</p>
+</div>
+</main>
+<div class="noise-band" aria-hidden="true"></div>
+<footer class="site-footer">
+<div class="wrap">
+<div class="footer-logo"><img src="img/echosystems-logo-512.png" srcset="img/echosystems-logo-512.png 1x, img/echosystems-logo-1024.png 2x" width="512" height="495" alt="EchoSystems AI Studios logo"></div>
+<div>
+<p><strong>cgm-zig is provided to the world by EchoSystems AI Studios.</strong></p>
+<p>It is a fork of Zig 0.16.0 and is not the Zig project&rsquo;s. Zig is by the Zig contributors and is under the MIT licence. This site uses no Zig logo or mark.</p>
+<ul>
+<li><a href="https://github.com/danielcamposramos/cgm-zig">Repository</a></li>
+<li><a href="https://github.com/danielcamposramos/cgm-zig/releases">Releases</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.23309000">Cite it (DOI)</a></li>
+<li><a href="about.html#provenance">How it was made</a></li>
+<li><a href="https://echosystems.ai">echosystems.ai</a></li>
+</ul>
+</div>
+</div>
+</footer>
+</body>
+</html>

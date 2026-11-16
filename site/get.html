@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get cgm-zig: releases, install and build</title>
+<meta name="description" content="The released cgm-zig toolchains for 64-bit Linux, how to check and install one, and how to build it from source.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Get cgm-zig: releases, install and build">
+<meta property="og:description" content="The released cgm-zig toolchains for 64-bit Linux, how to check and install one, and how to build it from source.">
+<meta property="og:image" content="img/social-card.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+<header class="site-header">
+<div class="wrap">
+<a class="brand" href="index.html"><img src="img/echosystems-symbol-128.png" width="40" height="40" alt="EchoSystems AI Studios symbol"><span>cgm-zig</span></a>
+<nav aria-label="Main"><ul class="nav"><li><a href="changes.html">What changes</a></li><li><a href="get.html" aria-current="page">Get it</a></li><li><a href="about.html">About and credits</a></li></ul></nav>
+</div>
+</header>
+<main id="main">
+<div class="wrap">
+
+<p class="crumbs"><a href="index.html">cgm-zig</a> / Get it</p>
+<h1>Get it</h1>
+<p class="lead">Download a released toolchain for 64-bit Linux, check its checksum, and point <code>zig</code> at it. Nothing else on your system changes.</p>
+
+<h2 id="releases">The releases</h2>
+<div class="table-wrap" role="region" aria-label="Releases" tabindex="0"><table>
+<caption>Releases on GitHub</caption>
+<thead><tr><th scope="col">Release</th><th scope="col">Date</th><th scope="col">What it is</th></tr></thead>
+<tbody>
+<tr><td data-label="Release"><a href="https://github.com/danielcamposramos/cgm-zig/releases/tag/0.16.0%2Bcgm.046d6833"><code>0.16.0+cgm.046d6833</code></a></td><td data-label="Date">2026-08-30</td><td data-label="What it is">The promoted toolchain, x86_64 Linux, ReleaseSafe. The one to install.</td></tr>
+<tr><td data-label="Release"><a href="https://github.com/danielcamposramos/cgm-zig/releases/tag/0.16.0%2Bcgm.0399d2b19b"><code>0.16.0+cgm.0399d2b19b</code></a></td><td data-label="Date">2026-09-07</td><td data-label="What it is">A candidate, marked prerelease, for trying out at an explicit path. Not for system-default installation.</td></tr>
+<tr><td data-label="Release"><a href="https://github.com/danielcamposramos/cgm-zig/releases/tag/v2026.10.12"><code>v2026.10.12</code></a></td><td data-label="Date">2026-10-12</td><td data-label="What it is">A source snapshot kept for citation. No new toolchain.</td></tr>
+</tbody></table></div>
+<p>The archives are on EchoSystems&rsquo; own server, with their checksums: <a href="https://repo.sparkyos.org/builds/cgm-zig/0.16.0%2Bcgm.046d6833/">0.16.0+cgm.046d6833</a> and <a href="https://repo.sparkyos.org/builds/cgm-zig/0.16.0%2Bcgm.0399d2b19b/">0.16.0+cgm.0399d2b19b</a>.</p>
+
+<h2 id="install">Install the promoted toolchain</h2>
+<div class="note">
+<p><strong>Before you start:</strong> the toolchain is not a static program. It needs the shared LLVM and Clang 21.1 libraries (<code>libclang-cpp.so.21.1</code> and <code>libLLVM.so.21.1</code>). Without them, <code>zig</code> stops at start-up with &ldquo;error while loading shared libraries&rdquo;. On Debian testing, <code>sudo apt install libclang-cpp21</code> brings both; on another system, install the packages that provide those two files.</p>
+</div>
+<p>The archive is 126 MB. Its SHA-256 is <code>de6fb2ae924536f1a7b2eb085f5a3fa2e74c48fe4cbc2ba28b397647729faa36</code>.</p>
+<pre><code>curl -LO https://repo.sparkyos.org/builds/cgm-zig/0.16.0%2Bcgm.046d6833/cgm-zig-x86_64-linux-0.16.0+cgm.046d6833.tar.xz
+echo "de6fb2ae924536f1a7b2eb085f5a3fa2e74c48fe4cbc2ba28b397647729faa36  cgm-zig-x86_64-linux-0.16.0+cgm.046d6833.tar.xz" | sha256sum -c
+tar xf cgm-zig-x86_64-linux-0.16.0+cgm.046d6833.tar.xz
+ln -sfn "$PWD/cgm-zig-x86_64-linux-0.16.0+cgm.046d6833/bin/zig" ~/.local/bin/zig
+zig version</code></pre>
+<p>The last command prints <code>0.16.0</code>. To go back, use the upstream 0.16.0 tarball from <a href="https://ziglang.org">ziglang.org</a>, whose SHA-256 is <code>43186959edc87d5c7a1be7b7d2a25efffd22ce5807c7af99067f86f99641bfdf</code>.</p>
+
+<h2 id="candidate">Try the newer candidate</h2>
+<div class="note">
+<p><strong>It needs x86-64 Linux with compatible system LLVM and Clang 21.1 libraries.</strong> It is not a static, generally portable package: its library path is <code>/usr/lib/llvm-21/lib</code> and LLVM, Clang, zlib, zstd and the C and C++ runtimes are not bundled.</p>
+</div>
+<p>Verify the archive against the attached <code>SHA256SUMS</code>, extract it, keep <code>bin/zig</code> beside <code>lib/zig</code>, and run <code>./bin/zig</code> directly. Do not replace your default compiler to evaluate it. On Debian-style multiarch systems, compiling against system headers may need an external <code>ZIG_LIBC</code> file, described in the <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/docs/crown/BUILDING.md">build guide</a>. The release page also lists a 605 MB evidence archive; never install the control binaries inside it.</p>
+
+<h2 id="build">Build it yourself</h2>
+<p>The fork&rsquo;s working compiler is built in ReleaseSafe, with safety checks on, so a failure names itself. The recipe that worked:</p>
+<pre><code>cmake -B build-safe \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DZIG_RELEASE_SAFE=ON \
+    -DZIG_STATIC_LLVM=OFF \
+    -DZIG_EXTRA_BUILD_ARGS=-Ddebug-extensions
+ninja -C build-safe</code></pre>
+<p>The result is <code>build-safe/stage3/bin/zig</code>. Use a fresh <code>build-*</code> folder inside the repository for each build. The two build-mode switches are not interchangeable: <code>CMAKE_BUILD_TYPE=ReleaseSafe</code> alone makes a stripped ReleaseFast compiler, so use the pair above. The <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/docs/crown/BUILDING.md">build guide</a> lists every obstacle met, with its control. A clean build under an 8-CPU mask on a busy host took about 41 minutes; the 8 to 9 minute figure is for an idle, unconstrained host.</p>
+<p>Upstream&rsquo;s own build instructions are preserved in <a href="https://github.com/danielcamposramos/cgm-zig/blob/main/README.upstream.md">README.upstream.md</a>.</p>
+</div>
+</main>
+<div class="noise-band" aria-hidden="true"></div>
+<footer class="site-footer">
+<div class="wrap">
+<div class="footer-logo"><img src="img/echosystems-logo-512.png" srcset="img/echosystems-logo-512.png 1x, img/echosystems-logo-1024.png 2x" width="512" height="495" alt="EchoSystems AI Studios logo"></div>
+<div>
+<p><strong>cgm-zig is provided to the world by EchoSystems AI Studios.</strong></p>
+<p>It is a fork of Zig 0.16.0 and is not the Zig project&rsquo;s. Zig is by the Zig contributors and is under the MIT licence. This site uses no Zig logo or mark.</p>
+<ul>
+<li><a href="https://github.com/danielcamposramos/cgm-zig">Repository</a></li>
+<li><a href="https://github.com/danielcamposramos/cgm-zig/releases">Releases</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.23309000">Cite it (DOI)</a></li>
+<li><a href="about.html#provenance">How it was made</a></li>
+<li><a href="https://echosystems.ai">echosystems.ai</a></li>
+</ul>
+</div>
+</div>
+</footer>
+</body>
+</html>

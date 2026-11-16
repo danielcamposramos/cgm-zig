@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="270" height="270" viewBox="0 0 270 270" aria-hidden="true" focusable="false">
+<rect width="270" height="270" fill="#101417"/>
+<rect x="18" y="18" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="52" y="18" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="86" y="18" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="120" y="18" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="154" y="18" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="188" y="18" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="222" y="18" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="18" y="52" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="52" y="52" width="30" height="30" rx="4" fill="#264653"/>
+<rect x="86" y="52" width="30" height="30" rx="4" fill="#264653"/>
+<rect x="120" y="52" width="30" height="30" rx="4" fill="#2A9D8F"/>
+<rect x="154" y="52" width="30" height="30" rx="4" fill="#E9C46A"/>
+<rect x="188" y="52" width="30" height="30" rx="4" fill="#264653"/>
+<rect x="222" y="52" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="18" y="86" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="52" y="86" width="30" height="30" rx="4" fill="#264653"/>
+<rect x="86" y="86" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="120" y="86" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="154" y="86" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="188" y="86" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="222" y="86" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="18" y="120" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="52" y="120" width="30" height="30" rx="4" fill="#264653"/>
+<rect x="86" y="120" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="120" y="120" width="30" height="30" rx="4" fill="#2A9D8F"/>
+<rect x="154" y="120" width="30" height="30" rx="4" fill="#2A9D8F"/>
+<rect x="188" y="120" width="30" height="30" rx="4" fill="#E9C46A"/>
+<rect x="222" y="120" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="18" y="154" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="52" y="154" width="30" height="30" rx="4" fill="#264653"/>
+<rect x="86" y="154" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="120" y="154" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="154" y="154" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="188" y="154" width="30" height="30" rx="4" fill="#E9C46A"/>
+<rect x="222" y="154" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="18" y="188" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="52" y="188" width="30" height="30" rx="4" fill="#264653"/>
+<rect x="86" y="188" width="30" height="30" rx="4" fill="#D64545"/>
+<rect x="120" y="188" width="30" height="30" rx="4" fill="#F4A261"/>
+<rect x="154" y="188" width="30" height="30" rx="4" fill="#2A9D8F"/>
+<rect x="188" y="188" width="30" height="30" rx="4" fill="#264653"/>
+<rect x="222" y="188" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="18" y="222" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="52" y="222" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="86" y="222" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="120" y="222" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="154" y="222" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="188" y="222" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="222" y="222" width="30" height="30" rx="4" fill="#264653" opacity=".06"/>
+<rect x="86" y="86" width="64" height="64" rx="8" fill="none" stroke="#FDFDFD" stroke-opacity=".18" stroke-width="2"/>
+</svg>
